@@ -485,6 +485,7 @@ const classNodes = [
   { id:'snapshot_ctl', ns:'db::snapshot', layer:'storage', desc:'Snapshot controller: manages table snapshots, backups, and snapshot lifecycle.' },
   { id:'batchlog_manager', ns:'db', layer:'storage', desc:'Manages batchlog replay for atomic batch writes across partitions.' },
   { id:'sstables_loader', ns:'', layer:'storage', desc:'Loads SSTables from external sources into the database.' },
+  { id:'raft_sys_table_storage', ns:'service', layer:'storage', desc:'Persistent Raft log storage: persists log entries, snapshots, term/vote, and commit index to the system.raft CQL table.' },
 
   // === CLUSTER LAYER ===
   { id:'gossiper', ns:'gms', layer:'cluster', desc:'Gossip protocol engine: failure detection (Phi accrual), endpoint state distribution, cluster membership.' },
@@ -498,12 +499,17 @@ const classNodes = [
   { id:'failure_detector', ns:'direct_fd', layer:'cluster', desc:'Direct failure detector for node liveness. No sharded service dependencies.' },
   { id:'address_map', ns:'service', layer:'cluster', desc:'Maps host IDs to IP addresses. Used via gossip_address_map alias by gossiper, storage_service, and messaging_service.' },
   { id:'direct_fd_pinger', ns:'service', layer:'cluster', desc:'Pinger for direct failure detector, sending ping messages over messaging service.' },
+  { id:'raft_server', ns:'raft', layer:'cluster', desc:'Core Raft consensus engine: drives leader election, log replication, snapshotting, and configuration changes for each Raft group.' },
+  { id:'raft_rpc', ns:'service', layer:'cluster', desc:'ScyllaDB Raft RPC transport: translates Raft protocol messages into network calls via messaging_service.' },
 
   // === SERVICES LAYER ===
   { id:'storage_service', ns:'service', layer:'services', desc:'Central orchestrator for the node lifecycle: bootstrap, decommission, topology changes, schema agreement.' },
   { id:'storage_proxy', ns:'service', layer:'services', desc:'Coordinates reads/writes across replicas: consistency levels, read repair, speculative retry, hints.' },
   { id:'migration_manager', ns:'service', layer:'services', desc:'Manages schema migrations and propagation. Observes gossiper state changes.' },
-  { id:'raft_group_registry', ns:'service', layer:'services', desc:'Raft group registry: manages Raft group 0 for strongly-consistent schema and topology operations.' },
+  { id:'raft_group_registry', ns:'service', layer:'services', desc:'Raft group registry: creates, owns, and manages the lifecycle of all raft::server instances on a shard, including group 0 and tablet Raft groups.' },
+  { id:'raft_group0', ns:'service', layer:'services', desc:'Manages the lifecycle of cluster-wide Raft group 0: discovery, bootstrap, join/leave, and upgrade from pre-Raft procedures.' },
+  { id:'raft_group0_client', ns:'service', layer:'services', desc:'Client interface for posting commands to Raft group 0: serializes operations via group0_guard and enforces linearizability.' },
+  { id:'group0_state_machine', ns:'service', layer:'services', desc:'State machine for Raft group 0: applies committed commands (schema changes, topology changes, broadcast table queries) to the local database.' },
   { id:'qos_controller', ns:'qos', layer:'services', desc:'Quality-of-service: maps users to service levels and scheduling groups.' },
   { id:'auth_service', ns:'auth', layer:'services', desc:'Authentication/authorization service: manages authenticators, authorizers, role managers.' },
   { id:'auth_cache', ns:'auth', layer:'services', desc:'Auth permission and role cache: caches role records and permissions from system tables.' },
@@ -545,7 +551,9 @@ const DEP_DESCRIPTIONS = {
   'storage_service->snitch->sharded-ref': 'Queries for datacenter/rack location (used in token_metadata topology updates, join parameters, range_streamer construction), retrieves the snitch name for gossip application state, and subscribes to snitch reconfiguration events.',
   'storage_service->qos_controller->sharded-ref': 'Upgrades the QoS service level controller from v1 to v2 (using raft-based data accessor) during topology state loading, updates both service levels cache and effective service levels cache on topology transitions.',
   'storage_service->auth_service->ref': 'Triggers auth_cache().load_all() to reload all cached authentication/authorization data when the auth subsystem is upgraded to v2 during consistent topology change enablement.',
-  'storage_service->raft_group_registry->raw-ptr': 'Accesses the group0 Raft server for leader checks and topology coordination, starts/prepares/commits commands via the group0 client, and performs setup/discover/finish group0 during cluster join.',
+  'storage_service->raft_group_registry->raw-ptr': 'Accesses the group0 Raft server for leader checks and topology coordination via the registry.',
+  'storage_service->raft_group0->method-param': 'Calls setup_group0(), join_group0(), and finish_setup_after_join() during cluster join and bootstrap to manage group 0 lifecycle.',
+  'storage_service->raft_group0_client->raw-ptr': 'Starts guarded operations, prepares and commits topology change commands via the group0 client.',
   'storage_service->shared_token_metadata->ref': 'Reads the current token_metadata_ptr for endpoint/topology lookups, clones it for mutation, acquires the lock for serialized updates, sets new metadata after topology transitions, and provides access to tablet metadata and version tracking.',
   'storage_service->system_keyspace->sharded-ref': 'Reads and writes persistent cluster state: bootstrap state, saved tokens, endpoint/peer info, topology state, CDC generation IDs, host-to-IP mappings, peer features, service level versions, auth versions, and topology request entries.',
   'storage_service->cdc_generation->sharded-ref': 'Delegates CDC generation lifecycle: applies new CDC generation IDs via handle_cdc_generation, loads CDC tablet streams, calls leave_ring during decommission, and queries CDC timestamps and streams.',
@@ -564,7 +572,8 @@ const DEP_DESCRIPTIONS = {
   'storage_proxy->gossiper->raw-ptr': 'Checks node liveness (is_alive()), resolves host IDs to/from IP addresses, enumerates live/unreachable cluster members for truncation quorum checks.',
   'storage_proxy->migration_manager->raw-ptr': 'Fetches schemas from remote nodes when handling incoming RPC requests (get_schema_for_read() and get_schema_for_write()), ensuring the correct schema version before processing.',
   'storage_proxy->system_keyspace->raw-ptr': 'Queries topology request entries from system tables when coordinating global topology operations like truncation and snapshotting.',
-  'storage_proxy->raft_group_registry->raw-ptr': 'Performs Raft group 0 operations: starts guarded operations, prepares and submits topology change commands for tablet-based truncation and snapshot requests.',
+  'storage_proxy->raft_group_registry->raw-ptr': 'Accesses the Raft group registry for group 0 server access.',
+  'storage_proxy->raft_group0_client->raw-ptr': 'Starts guarded operations, prepares and submits topology change commands for tablet-based truncation and snapshot requests.',
   'storage_proxy->cdc_generation->raw-ptr': 'Augments write mutations with CDC log entries and checks whether CDC augmentation is needed; set post-construction to break the circular dependency.',
   'storage_proxy->erm_factory->ref': 'Exposes the factory via get_erm_factory() so other components can create effective replication maps for keyspaces when initializing or updating topology.',
 
@@ -573,19 +582,52 @@ const DEP_DESCRIPTIONS = {
   'migration_manager->storage_proxy->ref': 'Accesses the database, schema tables, and data dictionary for reading/writing schema mutations.',
   'migration_manager->gossiper->ref': 'Checks endpoint liveness, reads endpoint/application state (SCHEMA version), enumerates live members, and publishes local schema version via add_local_application_state.',
   'migration_manager->feature_service->ref': 'Queries cluster_schema_features() for schema serialization and checks feature flags (group0_schema_versioning, in_memory_tables) that gate schema-related behavior.',
-  'migration_manager->raft_group_registry->ref': 'Starts group0 operations, adds entries to the Raft log, prepares schema-change commands, and checks group0 upgrade state.',
+  'migration_manager->raft_group_registry->ref': 'Accesses the Raft group registry for group 0 server and upgrade state checks.',
+  'migration_manager->raft_group0_client->ref': 'Starts group0 operations, adds entries to the Raft log, and prepares schema-change commands via the group0 client.',
   'migration_manager->system_keyspace->sharded-ref': 'Gets/sets the group0 schema version and passes it to db::schema_tables::merge_schema.',
   'migration_manager->storage_service->pluggable': 'Plugged late via plug_storage_service(); obtains a permit from storage_service for schema merge operations.',
   'migration_manager->gossiper->observer': 'Reacts to endpoint state changes (on_join, on_change, on_alive) to schedule schema pulls when remote endpoint states change.',
 
   // --- raft_group_registry ---
   'raft_group_registry->messaging_service->sharded-ref': 'Registers/unregisters all Raft RPC verb handlers (append_entries, vote_request, vote_reply, etc.) and the direct_fd_ping verb.',
-  'raft_group_registry->gossiper->ref': 'Used via raft_group0 for get_broadcast_address(), set_group0_id(), and peer exchange during Raft discovery.',
-  'raft_group_registry->feature_service->ref': 'Used via raft_group0 to check features like group0_limited_voters and supports_raft_cluster_mgmt.',
-  'raft_group_registry->storage_service->method-param': 'Passed to setup_group0(), join_group0(), finish_setup_after_join() for discovery leader initialization, topology upgrade state, and checking raft_topology_change_enabled().',
-  'raft_group_registry->query_processor->method-param': 'Passed to create_server_for_group0() and setup methods to create raft_sys_table_storage (persistent Raft log) and persistent_discovery.',
-  'raft_group_registry->migration_manager->method-param': 'Passed to create_server_for_group0(), setup_group0(), join_group0() to create the group0_state_machine and disable schema pulls once Raft-based schema management is active.',
-  'raft_group_registry->system_keyspace->method-param': 'Passed to setup_group0() and setup_group0_if_exist() to get/set the persisted Raft group0 ID and check bootstrap completion state.',
+  'raft_group_registry->raft_server->unique-ptr': 'Creates, owns, starts, aborts, and destroys raft::server instances for each Raft group via start_server_for_group().',
+  'raft_group_registry->raft_rpc->unique-ptr': 'Creates raft_rpc instances as the RPC transport for each raft::server when starting a new Raft group.',
+  'raft_group_registry->raft_sys_table_storage->unique-ptr': 'Creates raft_sys_table_storage instances as the persistence backend for each raft::server.',
+  'raft_group_registry->direct_fd_pinger->ref': 'Uses the direct failure detector pinger and proxy to provide raft::failure_detector to all Raft groups.',
+
+  // --- raft_group0 ---
+  'raft_group0->raft_group_registry->ref': 'Accesses the Raft group registry to create/access the group 0 raft::server instance and manage its lifecycle.',
+  'raft_group0->raft_group0_client->ref': 'Holds reference to the group0 client for posting commands and managing the upgrade state.',
+  'raft_group0->gossiper->ref': 'Uses get_broadcast_address(), set_group0_id(), and peer exchange during Raft discovery and group 0 setup.',
+  'raft_group0->feature_service->ref': 'Checks features like group0_limited_voters and supports_raft_cluster_mgmt to gate group 0 behavior.',
+  'raft_group0->messaging_service->sharded-ref': 'Registers Raft discovery RPC verbs for initial group 0 peer exchange.',
+  'raft_group0->storage_service->method-param': 'Passed to setup_group0(), join_group0(), finish_setup_after_join() for discovery leader initialization, topology upgrade state, and checking raft_topology_change_enabled().',
+  'raft_group0->query_processor->method-param': 'Passed to create_server_for_group0() and setup methods to create raft_sys_table_storage (persistent Raft log) and persistent_discovery.',
+  'raft_group0->migration_manager->method-param': 'Passed to create_server_for_group0(), setup_group0(), join_group0() to create the group0_state_machine and disable schema pulls once Raft-based schema management is active.',
+  'raft_group0->system_keyspace->method-param': 'Passed to setup_group0() and setup_group0_if_exist() to get/set the persisted Raft group0 ID and check bootstrap completion state.',
+
+  // --- raft_group0_client ---
+  'raft_group0_client->raft_group_registry->ref': 'Accesses the group 0 raft::server via the registry to submit commands and perform read barriers.',
+  'raft_group0_client->system_keyspace->ref': 'Reads and writes the group0 upgrade state and other persistent Raft metadata from system tables.',
+  'raft_group0_client->shared_token_metadata->ref': 'Accesses token metadata for topology-aware operations within group 0 command processing.',
+
+  // --- raft_server ---
+  'raft_server->raft_rpc->unique-ptr': 'Owns the RPC transport implementation for sending and receiving Raft protocol messages (append_entries, vote, snapshot).',
+  'raft_server->raft_sys_table_storage->unique-ptr': 'Owns the persistence backend for durably storing Raft log entries, snapshots, and term/vote state.',
+  'raft_server->group0_state_machine->unique-ptr': 'Owns the state machine that applies committed Raft commands to the local database (for group 0).',
+
+  // --- raft_rpc ---
+  'raft_rpc->messaging_service->ref': 'Sends all Raft protocol messages (append_entries, vote_request, vote_reply, install_snapshot, etc.) over the network via messaging_service RPC verbs.',
+
+  // --- raft_sys_table_storage ---
+  'raft_sys_table_storage->query_processor->ref': 'Executes CQL queries against the system.raft table to persist and load Raft log entries, snapshots, and server state.',
+
+  // --- group0_state_machine ---
+  'group0_state_machine->raft_group0_client->ref': 'Manages state IDs for optimistic concurrency control when applying committed group 0 commands.',
+  'group0_state_machine->migration_manager->ref': 'Applies committed schema mutations by merging them into the local schema via the migration manager.',
+  'group0_state_machine->storage_proxy->ref': 'Applies committed data mutations (write_mutations commands) through the storage proxy.',
+  'group0_state_machine->storage_service->ref': 'Applies committed topology change commands via the storage service.',
+  'group0_state_machine->feature_service->ref': 'Checks feature flags to determine behavior when applying committed group 0 commands.',
 
   // --- gossiper ---
   'gossiper->shared_token_metadata->ref': 'Obtains topology info (my_host_id, my_address, datacenter, rack) and accesses the token metadata pointer for endpoint identity.',
@@ -639,7 +681,8 @@ const DEP_DESCRIPTIONS = {
   'view_builder->database->ref': 'Looks up tables/schemas, accesses token metadata, obtains reader permits/semaphores, and iterates views for the materialized view build process.',
   'view_builder->system_keyspace->ref': 'Persists and loads view build progress, manages built-view markers, and registers/removes view build status entries in local system tables.',
   'view_builder->query_processor->ref': 'Executes raft-coordinated view build status announcements (via announce_with_raft) and queries the view_build_status tables for distributed build state.',
-  'view_builder->raft_group_registry->ref': 'Coordinates view build status changes (started/success/removed) as linearizable raft group 0 commands across the cluster.',
+  'view_builder->raft_group_registry->ref': 'Accesses the Raft group registry for group 0 operations.',
+  'view_builder->raft_group0_client->ref': 'Coordinates view build status changes (started/success/removed) as linearizable raft group 0 commands across the cluster via the group0 client.',
   'view_builder->view_update_generator->ref': 'Delegates staging sstable registration and invokes view-update population (via populate_views) when processing base-table rows during incremental view builds.',
   'view_builder->migration_manager->raw-ptr': 'Used only during start() to wait for schema agreement across the cluster before beginning the view build procedure.',
 
@@ -648,7 +691,8 @@ const DEP_DESCRIPTIONS = {
   'view_building_worker->system_keyspace->ref': 'Persists view building task mutations via raft, loads/removes built-view markers, manages view build progress, and registers views for building.',
   'view_building_worker->messaging_service->ref': 'Registers/unregisters the work_on_view_building_tasks RPC verb, enabling the view building coordinator to dispatch build tasks to worker nodes.',
   'view_building_worker->view_update_generator->ref': 'Invokes populate_views during range-build tasks and process_staging_sstables to generate and propagate view updates from staging data.',
-  'view_building_worker->raft_group_registry->ref': 'Starts raft group 0 operations, prepares and commits view-building-task mutations as group 0 commands.',
+  'view_building_worker->raft_group_registry->ref': 'Accesses the Raft group registry for group 0 operations.',
+  'view_building_worker->raft_group0_client->ref': 'Starts raft group 0 operations, prepares and commits view-building-task mutations as group 0 commands via the group0 client.',
 
   // --- view_update_generator ---
   'view_update_generator->database->ref': 'Plugs itself into the database on construction; discovers staging sstables, obtains reader permits, and manages view-update memory backpressure.',
@@ -667,7 +711,8 @@ const DEP_DESCRIPTIONS = {
 
   // --- auth_service ---
   'auth_service->query_processor->ref': 'Accesses the database for keyspace checks, resets caches, and executes internal CQL queries for authentication, authorization, and role management.',
-  'auth_service->raft_group_registry->ref': 'Commits auth-related mutations (role/permission changes) as linearizable raft group 0 commands via group0_batch::commit().',
+  'auth_service->raft_group_registry->ref': 'Accesses the Raft group registry for group 0 operations.',
+  'auth_service->raft_group0_client->ref': 'Commits auth-related mutations (role/permission changes) as linearizable raft group 0 commands via group0_batch::commit().',
   'auth_service->auth_cache->ref': 'Loads all role data at startup, sets the permission loader callback, retrieves cached permission sets for authorization checks, and prunes cached permissions when resources are revoked.',
 
   // --- auth_cache ---
@@ -684,7 +729,8 @@ const DEP_DESCRIPTIONS = {
   'query_processor->migration_manager->method-param': 'Obtains group0 guards for DDL operations and checks concurrent DDL retries; injected late via start_remote().',
   'query_processor->mapreduce_service->method-param': 'Delegates cluster-wide aggregation dispatch via query_processor::mapreduce(); injected late via start_remote().',
   'query_processor->strong_coordinator->method-param': 'Acquired via acquire_strongly_consistent_coordinator() for tablet-level strongly consistent reads and writes; injected late via start_remote().',
-  'query_processor->raft_group_registry->method-param': 'Executes broadcast table queries and obtains group0 guards for schema changes; injected late via start_remote().',
+  'query_processor->raft_group_registry->method-param': 'Accesses the Raft group registry; injected late via start_remote().',
+  'query_processor->raft_group0_client->method-param': 'Executes broadcast table queries and obtains group0 guards for schema changes; accessed via the group registry.',
 
   // --- cql_server ---
   'cql_server->query_processor->sharded-ref': 'Dispatches all incoming CQL protocol requests (query, prepare, execute, batch) to the query processor on the appropriate shard.',
@@ -792,6 +838,8 @@ const classEdges = [
   ['storage_service','qos_controller','sharded-ref',1],
   ['storage_service','auth_service','ref',1],
   ['storage_service','raft_group_registry','raw-ptr',2],
+  ['storage_service','raft_group0','method-param',2],
+  ['storage_service','raft_group0_client','raw-ptr',2],
   ['storage_service','shared_token_metadata','ref',3],
   ['storage_service','system_keyspace','sharded-ref',2],
   ['storage_service','cdc_generation','sharded-ref',1],
@@ -811,6 +859,7 @@ const classEdges = [
   ['storage_proxy','migration_manager','raw-ptr',2],
   ['storage_proxy','system_keyspace','raw-ptr',2],
   ['storage_proxy','raft_group_registry','raw-ptr',2],
+  ['storage_proxy','raft_group0_client','raw-ptr',2],
   ['storage_proxy','cdc_generation','raw-ptr',1],
   ['storage_proxy','erm_factory','ref',2],
 
@@ -820,18 +869,51 @@ const classEdges = [
   ['migration_manager','gossiper','ref',2],
   ['migration_manager','feature_service','ref',1],
   ['migration_manager','raft_group_registry','ref',2],
+  ['migration_manager','raft_group0_client','ref',2],
   ['migration_manager','system_keyspace','sharded-ref',1],
   ['migration_manager','storage_service','pluggable',2],
   ['migration_manager','gossiper','observer',3],
 
   // --- raft_group_registry ---
   ['raft_group_registry','messaging_service','sharded-ref',2],
-  ['raft_group_registry','gossiper','ref',2],
-  ['raft_group_registry','feature_service','ref',1],
-  ['raft_group_registry','storage_service','method-param',1],
-  ['raft_group_registry','query_processor','method-param',1],
-  ['raft_group_registry','migration_manager','method-param',1],
-  ['raft_group_registry','system_keyspace','method-param',1],
+  ['raft_group_registry','raft_server','unique-ptr',3],
+  ['raft_group_registry','raft_rpc','unique-ptr',2],
+  ['raft_group_registry','raft_sys_table_storage','unique-ptr',2],
+  ['raft_group_registry','direct_fd_pinger','ref',1],
+
+  // --- raft_group0 ---
+  ['raft_group0','raft_group_registry','ref',3],
+  ['raft_group0','raft_group0_client','ref',2],
+  ['raft_group0','gossiper','ref',2],
+  ['raft_group0','feature_service','ref',1],
+  ['raft_group0','messaging_service','sharded-ref',1],
+  ['raft_group0','storage_service','method-param',1],
+  ['raft_group0','query_processor','method-param',1],
+  ['raft_group0','migration_manager','method-param',1],
+  ['raft_group0','system_keyspace','method-param',1],
+
+  // --- raft_group0_client ---
+  ['raft_group0_client','raft_group_registry','ref',2],
+  ['raft_group0_client','system_keyspace','ref',2],
+  ['raft_group0_client','shared_token_metadata','ref',1],
+
+  // --- raft_server ---
+  ['raft_server','raft_rpc','unique-ptr',3],
+  ['raft_server','raft_sys_table_storage','unique-ptr',3],
+  ['raft_server','group0_state_machine','unique-ptr',3],
+
+  // --- raft_rpc ---
+  ['raft_rpc','messaging_service','ref',3],
+
+  // --- raft_sys_table_storage ---
+  ['raft_sys_table_storage','query_processor','ref',3],
+
+  // --- group0_state_machine ---
+  ['group0_state_machine','raft_group0_client','ref',2],
+  ['group0_state_machine','migration_manager','ref',2],
+  ['group0_state_machine','storage_proxy','ref',2],
+  ['group0_state_machine','storage_service','ref',1],
+  ['group0_state_machine','feature_service','ref',1],
 
   // --- gossiper ---
   ['gossiper','shared_token_metadata','ref',2],
@@ -880,6 +962,7 @@ const classEdges = [
   // --- auth_service ---
   ['auth_service','query_processor','ref',2],
   ['auth_service','raft_group_registry','ref',1],
+  ['auth_service','raft_group0_client','ref',1],
   ['auth_service','auth_cache','ref',2],
 
   // --- auth_cache ---
@@ -890,6 +973,7 @@ const classEdges = [
   ['view_builder','system_keyspace','ref',1],
   ['view_builder','query_processor','ref',1],
   ['view_builder','raft_group_registry','ref',1],
+  ['view_builder','raft_group0_client','ref',1],
   ['view_builder','view_update_generator','ref',2],
   ['view_builder','migration_manager','raw-ptr',1],
 
@@ -899,6 +983,7 @@ const classEdges = [
   ['view_building_worker','messaging_service','ref',1],
   ['view_building_worker','view_update_generator','ref',2],
   ['view_building_worker','raft_group_registry','ref',1],
+  ['view_building_worker','raft_group0_client','ref',1],
 
   // --- view_update_generator ---
   ['view_update_generator','database','ref',2],
@@ -940,6 +1025,7 @@ const classEdges = [
   ['query_processor','mapreduce_service','method-param',1],
   ['query_processor','strong_coordinator','method-param',1],
   ['query_processor','raft_group_registry','method-param',1],
+  ['query_processor','raft_group0_client','method-param',1],
 
   // --- alternator_executor ---
   ['alternator_executor','gossiper','ref',2],
