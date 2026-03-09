@@ -1,0 +1,1943 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScyllaDB Architecture Visualizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  :root {
+    /* Light theme (default) — palette derived from scviz mascot */
+    --bg: #f5f6f8;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #eaecf1;
+    --border: #c9ced8;
+    --text: #1a1d24;
+    --text-muted: #5c6370;
+    --accent: #4ab8c9;
+    --glow: rgba(74,184,201,0.18);
+    --shadow: rgba(0,0,0,0.06);
+    --edge-color: #b8bfca;
+    --edge-highlight: #4ab8c9;
+    --text-shadow-node: 0 0 6px rgba(255,255,255,0.9);
+    --node-fill-opacity: 0.18;
+    --node-stroke-opacity: 0.85;
+    --band-opacity: 0.04;
+    --tier-label-opacity: 0.45;
+    --guide-line-opacity: 0.08;
+  }
+  [data-theme="dark"] {
+    --bg: #0c1017;
+    --bg-secondary: #141a23;
+    --bg-tertiary: #1c232e;
+    --border: #2a3240;
+    --text: #dde3ec;
+    --text-muted: #7c8694;
+    --accent: #5ccfdf;
+    --glow: rgba(92,207,223,0.25);
+    --shadow: rgba(0,0,0,0.3);
+    --edge-color: #1e2530;
+    --edge-highlight: #5ccfdf;
+    --text-shadow-node: 0 0 8px rgba(0,0,0,0.8);
+    --node-fill-opacity: 0.20;
+    --node-stroke-opacity: 0.75;
+    --band-opacity: 0.025;
+    --tier-label-opacity: 0.3;
+    --guide-line-opacity: 0.06;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    transition: background 0.3s, color 0.3s;
+  }
+  /* Header */
+  .header {
+    position: fixed; top:0; left:0; right:0; z-index:100;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; flex-wrap: nowrap; gap: 16px;
+    padding: 10px 20px;
+    backdrop-filter: blur(12px);
+    transition: background 0.3s, border-color 0.3s;
+  }
+  .header h1 {
+    font-size: 15px; font-weight: 700; letter-spacing: -0.3px;
+    background: linear-gradient(135deg, #4ab8c9, #5b5b8e);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    white-space: nowrap;
+  }
+  .header-logo {
+    width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 6px;
+    margin-right: -8px;
+    vertical-align: middle;
+  }
+  .search-box {
+    position: relative;
+    flex: 0 1 260px;
+    margin-left: auto;
+  }
+  .search-box input {
+    width: 100%;
+    padding: 6px 28px 6px 32px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 400;
+    outline: none;
+    transition: border-color 0.2s, background 0.3s;
+    font-family: inherit;
+  }
+  .search-box input:focus { border-color: var(--accent); }
+  .search-box::before {
+    content: '\1F50D';
+    position: absolute;
+    left: 10px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 13px;
+    opacity: 0.5;
+  }
+  .search-clear {
+    position: absolute;
+    right: 6px; top: 50%;
+    transform: translateY(-50%);
+    width: 18px; height: 18px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 18px;
+    text-align: center;
+    cursor: pointer;
+    border-radius: 50%;
+    padding: 0;
+    display: none;
+    transition: color 0.15s, background 0.15s;
+  }
+  .search-clear:hover { color: var(--text); background: var(--bg-tertiary); }
+  .search-box.has-value .search-clear { display: block; }
+  .stats {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  /* SVG area */
+  svg {
+    position: fixed;
+    top: 48px; left: 0;
+    width: 100%; height: calc(100vh - 48px);
+  }
+
+  /* Info Panel */
+  .info-panel {
+    position: fixed;
+    top: 58px; left: 10px;
+    width: 320px;
+    max-height: calc(100vh - 68px);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0;
+    z-index: 90;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateX(-20px);
+    transition: opacity 0.3s, transform 0.3s, background 0.3s, border-color 0.3s;
+    pointer-events: none;
+    box-shadow: 0 4px 24px var(--shadow);
+  }
+  .info-panel.visible {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: all;
+  }
+  .info-header {
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .info-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .info-header h2 {
+    font-size: 14px; font-weight: 600; letter-spacing: -0.2px;
+    flex: 1;
+  }
+  .info-close {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 18px;
+    border: none; background: none;
+    line-height: 1;
+    font-family: inherit;
+  }
+  .info-close:hover { color: var(--text); }
+  .info-body {
+    padding: 12px 16px 16px;
+    overflow-y: auto;
+    max-height: calc(100vh - 140px);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .info-body p {
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+  .info-body h3 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 12px 0 6px;
+  }
+  .dep-list {
+    list-style: none;
+  }
+  .dep-list li {
+    padding: 3px 0;
+    font-size: 11px;
+    font-weight: 450;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dep-list li[data-node-id] {
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 3px 4px;
+    margin: 0 -4px;
+    transition: background 0.15s;
+  }
+  .dep-list li[data-node-id]:hover {
+    background: var(--bg-tertiary);
+  }
+  @keyframes node-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+  }
+  .node-blink rect {
+    animation: node-blink 0.6s ease-in-out infinite;
+  }
+  .dep-list li .dep-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dep-type {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    margin-left: auto;
+    white-space: nowrap;
+  }
+  .file-count {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+
+  /* Right-hand side dependency detail panel */
+  .dep-detail-panel {
+    position: fixed;
+    top: 58px; right: 10px;
+    width: 340px;
+    max-height: calc(100vh - 68px);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0;
+    z-index: 90;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateX(20px);
+    transition: opacity 0.25s, transform 0.25s, background 0.3s, border-color 0.3s;
+    pointer-events: none;
+    box-shadow: 0 4px 24px var(--shadow);
+  }
+  .dep-detail-panel.visible {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: all;
+  }
+  .dep-detail-header {
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .dep-detail-header .dep-detail-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dep-detail-header h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: -0.2px;
+    flex: 1;
+    line-height: 1.3;
+  }
+  .dep-detail-body {
+    padding: 12px 16px 16px;
+    overflow-y: auto;
+    max-height: calc(100vh - 140px);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .dep-detail-body p {
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+  .dep-detail-body .dep-detail-type {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+  .dep-detail-body .dep-detail-strength {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    margin-left: 4px;
+  }
+  .dep-detail-body h3 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 12px 0 6px;
+  }
+  .dep-detail-body .dep-desc-text {
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+
+  .theme-toggle {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--text);
+    transition: background 0.2s, border-color 0.2s;
+    flex-shrink: 0;
+  }
+  .theme-toggle:hover {
+    background: var(--border);
+  }
+
+  /* Toolbar buttons */
+  .tool-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--text-muted);
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-family: inherit;
+  }
+  .tool-btn:hover {
+    background: var(--border);
+    color: var(--text);
+  }
+  .tool-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .tool-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  /* Path finder cursor hint */
+  .path-mode-hint {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-secondary);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--text);
+    z-index: 95;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+    font-family: inherit;
+  }
+  .path-mode-hint.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <img class="header-logo" src="data:image/svg+xml,%3Csvg viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%237dd4e0'/%3E%3Cstop offset='100%25' stop-color='%234ab8c9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M40 8C18 8 8 24 8 40c0 12 4 20 6 26l4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8c2-6 10-14 10-26C72 24 62 8 40 8z' fill='url(%23g)'/%3E%3Cellipse cx='34' cy='34' rx='12' ry='13' fill='white'/%3E%3Cellipse cx='37' cy='36' rx='6' ry='7' fill='%232d2d5e'/%3E%3Cpath d='M28 48Q34 54 44 48' stroke='%232d2d5e' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Crect x='52' y='28' width='8' height='36' rx='2' fill='%235b5b8e'/%3E%3Crect x='55' y='36' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3Crect x='60' y='30' width='8' height='34' rx='2' fill='%23e8a83e'/%3E%3Crect x='63' y='38' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3Crect x='68' y='28' width='8' height='36' rx='2' fill='%239e3b3b'/%3E%3Crect x='71' y='36' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3C/svg%3E" alt="logo">
+  <h1>ScyllaDB Architecture</h1>
+  <div class="search-box">
+    <input type="text" placeholder="Search services..." id="searchInput">
+    <button class="search-clear" id="searchClear">&times;</button>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div class="tool-sep"></div>
+  <button class="tool-btn" id="btnPath" title="Click two nodes to find shortest path">Path Finder</button>
+  <div class="tool-sep"></div>
+  <button class="theme-toggle" id="themeToggle" title="Toggle dark/light theme">&#9790;</button>
+</div>
+
+<div class="path-mode-hint" id="pathHint">Click a source node, then a target node</div>
+
+<svg id="graph"></svg>
+
+<div class="info-panel" id="infoPanel">
+  <div class="info-header">
+    <div class="info-dot" id="infoDot"></div>
+    <h2 id="infoTitle"></h2>
+    <button class="info-close" id="infoClose">&times;</button>
+  </div>
+  <div class="info-body" id="infoBody"></div>
+</div>
+
+<div class="dep-detail-panel" id="depDetailPanel">
+  <div class="dep-detail-header">
+    <div class="dep-detail-dot" id="depDetailDot"></div>
+    <h2 id="depDetailTitle"></h2>
+  </div>
+  <div class="dep-detail-body" id="depDetailBody"></div>
+</div>
+
+<script>
+// =============================================================================
+// DATA
+// =============================================================================
+
+const LAYERS = {
+  storage: { label: 'Storage Engine', color: '#d4903e' },
+  cluster: { label: 'Cluster / P2P', color: '#5b5b8e' },
+  services: { label: 'Core Services', color: '#4ab8c9' },
+  query: { label: 'Query Layer', color: '#e8a83e' },
+  api: { label: 'API / Protocol', color: '#9e3b3b' },
+};
+
+// ---- DEPENDENCY TYPE DATA ----
+const DEP_TYPES = {
+  ref: { label: 'Reference (&)', color: '#4ab8c9' },
+  'sharded-ref': { label: 'Sharded ref', color: '#5b5b8e' },
+  'raw-ptr': { label: 'Raw pointer (late-init)', color: '#d4903e' },
+  'unique-ptr': { label: 'Unique pointer (owned)', color: '#e8a83e' },
+  observer: { label: 'Observer/listener', color: '#2d2d5e' },
+  'pluggable': { label: 'Pluggable (late-init)', color: '#9e3b3b' },
+  'ctor-param': { label: 'Constructor param', color: '#6ec6d8' },
+  'method-param': { label: 'Method param only', color: '#7c8694' },
+};
+
+// ---- CLASS-LEVEL DATA ----
+// All peering_sharded_service / async_sharded_service classes in the ScyllaDB codebase
+
+const classNodes = [
+  // === STORAGE LAYER ===
+  { id:'database', ns:'replica', layer:'storage', desc:'The local replica database: owns tables, memtables, commitlog, SSTable managers, view update generator.' },
+  { id:'compaction_manager', ns:'compaction', layer:'storage', desc:'Manages compaction tasks across all tables, pluggable system_keyspace dependency.' },
+  { id:'storage_manager', ns:'sstables', layer:'storage', desc:'SSTable storage lifecycle management: creation, deletion, object storage.' },
+  { id:'sstable_compressor_factory', ns:'sstables', layer:'storage', desc:'Default SSTable compressor factory. No sharded service dependencies.' },
+  { id:'system_keyspace', ns:'db', layer:'storage', desc:'System keyspace operations: local metadata, peer info, compaction history, Raft state.' },
+  { id:'view_builder', ns:'db::view', layer:'storage', desc:'Materialized view builder: tracks pending views and coordinates build progress.' },
+  { id:'view_building_worker', ns:'db::view', layer:'storage', desc:'View building worker: executes tasks scheduled by coordinator for building views.' },
+  { id:'view_update_generator', ns:'db::view', layer:'storage', desc:'Generates materialized view updates from base table mutations.' },
+  { id:'snapshot_ctl', ns:'db::snapshot', layer:'storage', desc:'Snapshot controller: manages table snapshots, backups, and snapshot lifecycle.' },
+  { id:'batchlog_manager', ns:'db', layer:'storage', desc:'Manages batchlog replay for atomic batch writes across partitions.' },
+  { id:'sstables_loader', ns:'', layer:'storage', desc:'Loads SSTables from external sources into the database.' },
+
+  // === CLUSTER LAYER ===
+  { id:'gossiper', ns:'gms', layer:'cluster', desc:'Gossip protocol engine: failure detection (Phi accrual), endpoint state distribution, cluster membership.' },
+  { id:'messaging_service', ns:'netw', layer:'cluster', desc:'RPC transport layer: serialization, compression, connection pooling, verb routing between nodes.' },
+  { id:'shared_token_metadata', ns:'locator', layer:'cluster', desc:'Shared token metadata: token-to-endpoint mapping, pending ranges, tablet metadata.' },
+  { id:'erm_factory', ns:'locator', layer:'cluster', desc:'Effective replication map factory: creates and caches replication maps per strategy.' },
+  { id:'feature_service', ns:'gms', layer:'cluster', desc:'Cluster feature flags: tracks supported features across nodes for safe rolling upgrades.' },
+  { id:'snitch', ns:'locator', layer:'cluster', desc:'Endpoint snitch: provides datacenter/rack locality information for replication placement.' },
+  { id:'stream_manager', ns:'streaming', layer:'cluster', desc:'Orchestrates bulk data transfer between nodes for repair, bootstrap, rebuild.' },
+  { id:'repair_service', ns:'repair', layer:'cluster', desc:'Drives anti-entropy repair: hash comparison, streaming of differing ranges.' },
+  { id:'failure_detector', ns:'direct_fd', layer:'cluster', desc:'Direct failure detector for node liveness. No sharded service dependencies.' },
+  { id:'address_map', ns:'service', layer:'cluster', desc:'Maps host IDs to IP addresses. Used via gossip_address_map alias by gossiper, storage_service, and messaging_service.' },
+  { id:'direct_fd_pinger', ns:'service', layer:'cluster', desc:'Pinger for direct failure detector, sending ping messages over messaging service.' },
+
+  // === SERVICES LAYER ===
+  { id:'storage_service', ns:'service', layer:'services', desc:'Central orchestrator for the node lifecycle: bootstrap, decommission, topology changes, schema agreement.' },
+  { id:'storage_proxy', ns:'service', layer:'services', desc:'Coordinates reads/writes across replicas: consistency levels, read repair, speculative retry, hints.' },
+  { id:'migration_manager', ns:'service', layer:'services', desc:'Manages schema migrations and propagation. Observes gossiper state changes.' },
+  { id:'raft_group_registry', ns:'service', layer:'services', desc:'Raft group registry: manages Raft group 0 for strongly-consistent schema and topology operations.' },
+  { id:'qos_controller', ns:'qos', layer:'services', desc:'Quality-of-service: maps users to service levels and scheduling groups.' },
+  { id:'auth_service', ns:'auth', layer:'services', desc:'Authentication/authorization service: manages authenticators, authorizers, role managers.' },
+  { id:'auth_cache', ns:'auth', layer:'services', desc:'Auth permission and role cache: caches role records and permissions from system tables.' },
+  { id:'cdc_generation', ns:'cdc', layer:'services', desc:'CDC generation service: manages CDC stream generations tied to token ring changes.' },
+  { id:'cdc_service', ns:'cdc', layer:'services', desc:'CDC service: listens for schema changes and manages CDC log tables.' },
+  { id:'task_manager', ns:'tasks', layer:'services', desc:'Distributed task manager: tracks long-running operations (repair, compaction) across the cluster.' },
+  { id:'cache_hitrate_calculator', ns:'service', layer:'services', desc:'Cache hit-rate calculator: periodically recalculates and publishes cache stats via gossip.' },
+  { id:'paxos_store', ns:'service', layer:'services', desc:'Paxos state store: persists Paxos promise/proposal/decision state for LWT.' },
+  { id:'view_update_backlog_broker', ns:'service', layer:'services', desc:'View update backlog broker: publishes view backlog info via gossip.' },
+  { id:'tracing', ns:'tracing', layer:'services', desc:'Distributed request tracing infrastructure for recording and storing trace events.' },
+  { id:'mapreduce_service', ns:'service', layer:'services', desc:'Map-reduce service for distributed aggregation queries.' },
+  { id:'strong_coordinator', ns:'service::sc', layer:'services', desc:'Strong consistency coordinator for Raft-based operations.' },
+  { id:'groups_manager', ns:'service::sc', layer:'services', desc:'Strong consistency groups manager for Raft group lifecycle.' },
+  { id:'client_routes', ns:'service', layer:'services', desc:'Client routes service for CQL native transport routing.' },
+
+  // === QUERY LAYER ===
+  { id:'query_processor', ns:'cql3', layer:'query', desc:'CQL query processing pipeline: parsing, validation, optimization, execution.' },
+  { id:'lang_manager', ns:'lang', layer:'query', desc:'UDF runtime manager: Lua and WebAssembly scripting. No sharded service dependencies.' },
+  { id:'vector_store_client', ns:'vector_search', layer:'query', desc:'Vector similarity search client for ANN queries. No sharded service dependencies.' },
+
+  // === API LAYER ===
+  { id:'cql_server', ns:'transport', layer:'api', desc:'CQL protocol server: handles client connections, authentication, query dispatch.' },
+  { id:'alternator_executor', ns:'alternator', layer:'api', desc:'DynamoDB-compatible request executor: translates and executes DynamoDB API operations.' },
+  { id:'alternator_server', ns:'alternator', layer:'api', desc:'Alternator HTTP server: handles DynamoDB API requests and authentication.' },
+  { id:'alternator_expiration', ns:'alternator', layer:'api', desc:'Alternator TTL expiration service: cleans up expired items in Alternator tables.' },
+  { id:'audit', ns:'audit', layer:'api', desc:'Audit logging service with syslog and table-based storage backends.' },
+];
+
+// ---- DEPENDENCY DESCRIPTIONS (discovered from ScyllaDB source) ----
+const DEP_DESCRIPTIONS = {
+  // --- storage_service ---
+  'storage_service->database->sharded-ref': 'Accesses the local database for schema lookups, table/keyspace metadata, configuration (ring_delay, cluster_name, num_tokens), applying mutations, draining during shutdown, invoking compaction operations, and finding column families for tablet operations.',
+  'storage_service->gossiper->ref': 'Performs shadow rounds during join/replace, manages endpoint lifecycle (add/remove endpoints), advertises local application state (STATUS, TOKENS, SCHEMA), starts/stops gossiping, queries endpoint liveness, and resolves host IDs to IPs.',
+  'storage_service->messaging_service->sharded-ref': 'Registers all RPC verb handlers (node_ops_cmd, raft_topology_cmd, tablet_stream/repair/cleanup, join_node RPCs), sends RPCs to other nodes, bans hosts at the messaging layer during topology changes, and manages preferred IP reconnection.',
+  'storage_service->migration_manager->sharded-ref': 'Plugs itself as a migration_listener to receive schema change callbacks (on_create/update/drop_keyspace), uses the group0_client for raft operations, invokes passive_announce for schema version propagation, and drains migration_manager during shutdown.',
+  'storage_service->query_processor->ref': 'Executes internal CQL queries (e.g., during first-node bootstrap for topology mutations), accesses the storage_proxy for mutating data locally and updating fence versions, and upgrades the auth_version flag across all shards.',
+  'storage_service->repair_service->sharded-ref': 'Invokes repair for node lifecycle operations: bootstrap_with_repair, replace_with_repair, decommission_with_repair, removenode_with_repair, rebuild_with_repair, and tablet-level repair; also shuts down during drain.',
+  'storage_service->stream_manager->sharded-ref': 'Runs streaming operations (stream_ranges during bootstrap, decommission, removenode, rebuild, and tablet streaming) using its scheduling group, and shuts down on all shards during drain_on_shutdown.',
+  'storage_service->snitch->sharded-ref': 'Queries for datacenter/rack location (used in token_metadata topology updates, join parameters, range_streamer construction), retrieves the snitch name for gossip application state, and subscribes to snitch reconfiguration events.',
+  'storage_service->qos_controller->sharded-ref': 'Upgrades the QoS service level controller from v1 to v2 (using raft-based data accessor) during topology state loading, updates both service levels cache and effective service levels cache on topology transitions.',
+  'storage_service->auth_service->ref': 'Triggers auth_cache().load_all() to reload all cached authentication/authorization data when the auth subsystem is upgraded to v2 during consistent topology change enablement.',
+  'storage_service->raft_group_registry->raw-ptr': 'Accesses the group0 Raft server for leader checks and topology coordination, starts/prepares/commits commands via the group0 client, and performs setup/discover/finish group0 during cluster join.',
+  'storage_service->shared_token_metadata->ref': 'Reads the current token_metadata_ptr for endpoint/topology lookups, clones it for mutation, acquires the lock for serialized updates, sets new metadata after topology transitions, and provides access to tablet metadata and version tracking.',
+  'storage_service->system_keyspace->sharded-ref': 'Reads and writes persistent cluster state: bootstrap state, saved tokens, endpoint/peer info, topology state, CDC generation IDs, host-to-IP mappings, peer features, service level versions, auth versions, and topology request entries.',
+  'storage_service->cdc_generation->sharded-ref': 'Delegates CDC generation lifecycle: applies new CDC generation IDs via handle_cdc_generation, loads CDC tablet streams, calls leave_ring during decommission, and queries CDC timestamps and streams.',
+  'storage_service->view_builder->sharded-ref': 'Upgrades view_builder version (upgrade_to_v1_5 / upgrade_to_v2) during topology state loading, marks existing views as built before bootstrap streaming, and drains all instances during shutdown.',
+  'storage_service->feature_service->ref': 'Checks feature flags to gate functionality (e.g., file_stream, tablet_repair_scheduler, zero_token_nodes, topology_global_request_queue), validates enabled/unsafe features during topology transitions, and reads supported_feature_set for join parameters.',
+  'storage_service->task_manager->ctor-param': 'Registers three task_manager modules during construction (node_ops, tablets, global_topology_requests) to track and manage background tasks for these operation types.',
+  'storage_service->address_map->ref': 'Resolves host_id to IP address throughout topology operations, peer info updates, ownership calculations, schema version descriptions, and endpoint-to-address mappings for describe_ring.',
+  'storage_service->erm_factory->ref': 'Creates static effective_replication_map instances for each keyspace during token metadata changes, computing replica placement on the local shard and all other shards.',
+  'storage_service->gossiper->observer': 'Reacts to endpoint state changes (on_join, on_change, on_alive, on_dead, on_remove, on_restart) — updating system.peers, notifying up/down/CQL-ready status, and reconnecting preferred IPs.',
+
+  // --- storage_proxy ---
+  'storage_proxy->database->sharded-ref': 'Accesses local table/schema metadata, executes local reads and mutations, retrieves configuration parameters (timeouts, limits), finds effective replication maps, and initializes the hints managers.',
+  'storage_proxy->shared_token_metadata->ref': 'Obtains the current token metadata pointer, resolves the node\'s own address (my_address()), and derives fencing tokens for topology-aware write coordination.',
+  'storage_proxy->feature_service->ref': 'Checks cluster feature flags (e.g., separate_page_size_and_safety_limit, empty_replica_pages, lwt_with_tablets, batchlog_v2, address_nodes_by_host_ids) that gate backward-compatible protocol behavior.',
+  'storage_proxy->messaging_service->raw-ptr': 'Registers/unregisters all RPC verb handlers (mutation, read_data, read_digest, truncate, paxos operations) and sends all inter-node RPC requests for distributed reads and writes.',
+  'storage_proxy->gossiper->raw-ptr': 'Checks node liveness (is_alive()), resolves host IDs to/from IP addresses, enumerates live/unreachable cluster members for truncation quorum checks.',
+  'storage_proxy->migration_manager->raw-ptr': 'Fetches schemas from remote nodes when handling incoming RPC requests (get_schema_for_read() and get_schema_for_write()), ensuring the correct schema version before processing.',
+  'storage_proxy->system_keyspace->raw-ptr': 'Queries topology request entries from system tables when coordinating global topology operations like truncation and snapshotting.',
+  'storage_proxy->raft_group_registry->raw-ptr': 'Performs Raft group 0 operations: starts guarded operations, prepares and submits topology change commands for tablet-based truncation and snapshot requests.',
+  'storage_proxy->cdc_generation->raw-ptr': 'Augments write mutations with CDC log entries and checks whether CDC augmentation is needed; set post-construction to break the circular dependency.',
+  'storage_proxy->erm_factory->ref': 'Exposes the factory via get_erm_factory() so other components can create effective replication maps for keyspaces when initializing or updating topology.',
+
+  // --- migration_manager ---
+  'migration_manager->messaging_service->ref': 'Registers/unregisters RPC verb handlers (DEFINITIONS_UPDATE, MIGRATION_REQUEST, SCHEMA_CHECK, GET_SCHEMA_VERSION) and sends schema pull/push messages to peers.',
+  'migration_manager->storage_proxy->ref': 'Accesses the database, schema tables, and data dictionary for reading/writing schema mutations.',
+  'migration_manager->gossiper->ref': 'Checks endpoint liveness, reads endpoint/application state (SCHEMA version), enumerates live members, and publishes local schema version via add_local_application_state.',
+  'migration_manager->feature_service->ref': 'Queries cluster_schema_features() for schema serialization and checks feature flags (group0_schema_versioning, in_memory_tables) that gate schema-related behavior.',
+  'migration_manager->raft_group_registry->ref': 'Starts group0 operations, adds entries to the Raft log, prepares schema-change commands, and checks group0 upgrade state.',
+  'migration_manager->system_keyspace->sharded-ref': 'Gets/sets the group0 schema version and passes it to db::schema_tables::merge_schema.',
+  'migration_manager->storage_service->pluggable': 'Plugged late via plug_storage_service(); obtains a permit from storage_service for schema merge operations.',
+  'migration_manager->gossiper->observer': 'Reacts to endpoint state changes (on_join, on_change, on_alive) to schedule schema pulls when remote endpoint states change.',
+
+  // --- raft_group_registry ---
+  'raft_group_registry->messaging_service->sharded-ref': 'Registers/unregisters all Raft RPC verb handlers (append_entries, vote_request, vote_reply, etc.) and the direct_fd_ping verb.',
+  'raft_group_registry->gossiper->ref': 'Used via raft_group0 for get_broadcast_address(), set_group0_id(), and peer exchange during Raft discovery.',
+  'raft_group_registry->feature_service->ref': 'Used via raft_group0 to check features like group0_limited_voters and supports_raft_cluster_mgmt.',
+  'raft_group_registry->storage_service->method-param': 'Passed to setup_group0(), join_group0(), finish_setup_after_join() for discovery leader initialization, topology upgrade state, and checking raft_topology_change_enabled().',
+  'raft_group_registry->query_processor->method-param': 'Passed to create_server_for_group0() and setup methods to create raft_sys_table_storage (persistent Raft log) and persistent_discovery.',
+  'raft_group_registry->migration_manager->method-param': 'Passed to create_server_for_group0(), setup_group0(), join_group0() to create the group0_state_machine and disable schema pulls once Raft-based schema management is active.',
+  'raft_group_registry->system_keyspace->method-param': 'Passed to setup_group0() and setup_group0_if_exist() to get/set the persisted Raft group0 ID and check bootstrap completion state.',
+
+  // --- gossiper ---
+  'gossiper->shared_token_metadata->ref': 'Obtains topology info (my_host_id, my_address, datacenter, rack) and accesses the token metadata pointer for endpoint identity.',
+  'gossiper->messaging_service->ref': 'Sends all gossip protocol messages (SYN, ACK, ACK2, ECHO, SHUTDOWN, GET_ENDPOINT_STATES) and registers incoming gossip RPC handlers.',
+  'gossiper->address_map->ref': 'Maintains and exposes the mapping between host IDs and IP addresses for endpoint resolution throughout the cluster.',
+
+  // --- messaging_service ---
+  'messaging_service->feature_service->ref': 'Listens for the maintenance_tenant feature and enables the $maintenance scheduling tenant when activated.',
+  'messaging_service->qos_controller->ref': 'Resolves scheduling groups for service levels, dynamically adds unknown isolation cookies, and obtains default scheduling groups for RPC dispatch.',
+  'messaging_service->shared_token_metadata->raw-ptr': 'Determines peer datacenter/rack for encryption, compression, and tcp_nodelay decisions.',
+  'messaging_service->address_map->ref': 'Records host_id-to-IP mappings when CLIENT_ID connections are established and resolves host IDs to IP addresses for outgoing RPC calls.',
+
+  // --- database ---
+  'database->compaction_manager->ref': 'Delegates compaction lifecycle (enable, drain, plug forwarding) while each table submits/triggers compactions and manages compaction strategies.',
+  'database->feature_service->ref': 'Checks feature flags like fragmented_commitlog_entries during commitlog initialization.',
+  'database->shared_token_metadata->ref': 'Accessed via get_token_metadata_ptr() for token/range resolution, keyspace creation, and tablet support.',
+  'database->qos_controller->pluggable': 'Subscribes to QoS service level changes during start(), creating per-service-level reader concurrency semaphores dynamically.',
+  'database->system_keyspace->pluggable': 'Forwards the plug to compaction_manager, large_data_handler, and corrupt_data_handler, enabling them to persist truncation records, compaction history, and corruption reports to system tables.',
+  'database->view_update_generator->pluggable': 'Used in push_view_replica_updates() and stream_view_replica_updates() to generate and push materialized view update mutations.',
+  'database->erm_factory->method-param': 'Passed to create_keyspace(), create_in_memory_keyspace(), and create_local_system_table() to construct effective replication maps when initializing keyspaces.',
+
+  // --- stream_manager ---
+  'stream_manager->database->sharded-ref': 'Reads table data from the local shard during streaming sessions.',
+  'stream_manager->messaging_service->sharded-ref': 'Registers RPC handlers for stream session communication and sends/receives streaming data between nodes.',
+  'stream_manager->migration_manager->sharded-ref': 'Used during streaming operations for schema synchronization between nodes.',
+  'stream_manager->gossiper->ref': 'Registers/unregisters as an endpoint state change subscriber during start()/stop().',
+  'stream_manager->view_builder->ref': 'Coordinates materialized view building when data is streamed in.',
+  'stream_manager->gossiper->observer': 'Reacts to on_dead(), on_remove(), on_restart() callbacks to detect node failures and abort active streaming sessions to/from dead nodes.',
+
+  // --- repair_service ---
+  'repair_service->database->sharded-ref': 'Reads table data during repair, obtains schemas, creates readers, and accesses token metadata indirectly.',
+  'repair_service->storage_proxy->sharded-ref': 'Coordinates repair write operations across nodes, including applying repair row diffs.',
+  'repair_service->gossiper->sharded-ref': 'Checks node liveness, resolves host IDs, and registers a row_level_repair_gossip_helper for endpoint state change notifications during repair.',
+  'repair_service->messaging_service->ref': 'Handles all repair RPC communication including row-level repair protocol messages and RPC stream sink/source creation.',
+  'repair_service->system_keyspace->sharded-ref': 'Reads/writes repair history and repair task records to system tables.',
+  'repair_service->view_builder->ref': 'Passed to the streaming consumer during repair to coordinate materialized view building as repaired data is written.',
+  'repair_service->migration_manager->ref': 'Performs schema synchronization during repair operations.',
+  'repair_service->shared_token_metadata->sharded-ref': 'Clones and manipulates token metadata for topology operations like replace_with_repair (accessed indirectly via database).',
+  'repair_service->task_manager->ctor-param': 'Registers a repair::task_manager_module for tracking and managing repair tasks.',
+
+  // --- system_keyspace ---
+  'system_keyspace->query_processor->ref': 'Executes internal CQL extensively (35+ call sites) via execute_internal(), query_internal(), get_mutations_internal() to read/write all system table metadata.',
+  'system_keyspace->database->ref': 'Plugs itself into the database on construction and creates system tables via db.create_local_system_table().',
+  'system_keyspace->erm_factory->method-param': 'Provides the effective replication map factory needed when creating system keyspace tables with proper replication configurations.',
+
+  // --- compaction_manager ---
+  'compaction_manager->system_keyspace->pluggable': 'Writes compaction history entries via update_compaction_history() and reads them via get_compaction_history().',
+  'compaction_manager->task_manager->ctor-param': 'Registers a compaction::task_manager_module for tracking compaction tasks.',
+
+  // --- view_builder ---
+  'view_builder->database->ref': 'Looks up tables/schemas, accesses token metadata, obtains reader permits/semaphores, and iterates views for the materialized view build process.',
+  'view_builder->system_keyspace->ref': 'Persists and loads view build progress, manages built-view markers, and registers/removes view build status entries in local system tables.',
+  'view_builder->query_processor->ref': 'Executes raft-coordinated view build status announcements (via announce_with_raft) and queries the view_build_status tables for distributed build state.',
+  'view_builder->raft_group_registry->ref': 'Coordinates view build status changes (started/success/removed) as linearizable raft group 0 commands across the cluster.',
+  'view_builder->view_update_generator->ref': 'Delegates staging sstable registration and invokes view-update population (via populate_views) when processing base-table rows during incremental view builds.',
+  'view_builder->migration_manager->raw-ptr': 'Used only during start() to wait for schema agreement across the cluster before beginning the view build procedure.',
+
+  // --- view_building_worker ---
+  'view_building_worker->database->ref': 'Looks up base tables and view schemas, accesses token/tablet metadata, obtains reader permits, and iterates tables to discover staging sstables.',
+  'view_building_worker->system_keyspace->ref': 'Persists view building task mutations via raft, loads/removes built-view markers, manages view build progress, and registers views for building.',
+  'view_building_worker->messaging_service->ref': 'Registers/unregisters the work_on_view_building_tasks RPC verb, enabling the view building coordinator to dispatch build tasks to worker nodes.',
+  'view_building_worker->view_update_generator->ref': 'Invokes populate_views during range-build tasks and process_staging_sstables to generate and propagate view updates from staging data.',
+  'view_building_worker->raft_group_registry->ref': 'Starts raft group 0 operations, prepares and commits view-building-task mutations as group 0 commands.',
+
+  // --- view_update_generator ---
+  'view_update_generator->database->ref': 'Plugs itself into the database on construction; discovers staging sstables, obtains reader permits, and manages view-update memory backpressure.',
+  'view_update_generator->storage_proxy->sharded-ref': 'Sends view update mutations to replicas, manages view-write abort/backlog, and coordinates distributed view update propagation.',
+
+  // --- cdc_generation ---
+  'cdc_generation->gossiper->ref': 'Queries endpoint states (shard count, sharding info), checks node liveness/status, and publishes CDC generation IDs as gossip application state.',
+  'cdc_generation->system_keyspace->sharded-ref': 'Reads/writes CDC generation data, persists the current generation ID, checks rewrite status, and queries CDC stream state/history.',
+  'cdc_generation->shared_token_metadata->ref': 'Obtains the token ring layout, counts normal token owners for generation sizing, and accesses tablet maps for CDC stream generation.',
+  'cdc_generation->feature_service->ref': 'Checks whether the cdc_generations_v2 feature flag is enabled, which determines the CDC generation format (v1 vs v2) used during creation.',
+  'cdc_generation->database->ref': 'Checks for the existence of CDC-related schemas (e.g., cdc_desc_v1), iterates all tables when loading CDC tablet streams, and looks up base table schemas.',
+  'cdc_generation->gossiper->observer': 'Reacts to on_join/on_change callbacks after joining the ring to handle CDC generation gossip events.',
+
+  // --- cdc_service ---
+  'cdc_service->storage_proxy->ref': 'Accesses the database for schema lookups, executes read queries for pre-/post-images, registers itself on the proxy for CDC augmentation, and tracks CDC operation statistics.',
+
+  // --- auth_service ---
+  'auth_service->query_processor->ref': 'Accesses the database for keyspace checks, resets caches, and executes internal CQL queries for authentication, authorization, and role management.',
+  'auth_service->raft_group_registry->ref': 'Commits auth-related mutations (role/permission changes) as linearizable raft group 0 commands via group0_batch::commit().',
+  'auth_service->auth_cache->ref': 'Loads all role data at startup, sets the permission loader callback, retrieves cached permission sets for authorization checks, and prunes cached permissions when resources are revoked.',
+
+  // --- auth_cache ---
+  'auth_cache->query_processor->ref': 'Executes internal CQL queries that fetch role records (login status, superuser flag, grants, salted hashes, attributes, permissions) from auth system tables into the in-memory cache.',
+
+  // --- qos_controller ---
+  'qos_controller->auth_service->sharded-ref': 'Accesses the role manager for querying service-level attributes attached to roles, resolving effective service levels, and mapping authenticated users to scheduling groups.',
+  'qos_controller->shared_token_metadata->ref': 'Checks topology identity (via is_me) when handling endpoint lifecycle events such as a node leaving the cluster.',
+
+  // --- query_processor ---
+  'query_processor->storage_proxy->ref': 'Routes all CQL read/write operations to the storage layer.',
+  'query_processor->vector_store_client->ref': 'Services vector-search (ANN) queries from CQL statements.',
+  'query_processor->lang_manager->ref': 'Manages user-defined functions and aggregates written in supported scripting languages (Lua, WASM).',
+  'query_processor->migration_manager->method-param': 'Obtains group0 guards for DDL operations and checks concurrent DDL retries; injected late via start_remote().',
+  'query_processor->mapreduce_service->method-param': 'Delegates cluster-wide aggregation dispatch via query_processor::mapreduce(); injected late via start_remote().',
+  'query_processor->strong_coordinator->method-param': 'Acquired via acquire_strongly_consistent_coordinator() for tablet-level strongly consistent reads and writes; injected late via start_remote().',
+  'query_processor->raft_group_registry->method-param': 'Executes broadcast table queries and obtains group0 guards for schema changes; injected late via start_remote().',
+
+  // --- cql_server ---
+  'cql_server->query_processor->sharded-ref': 'Dispatches all incoming CQL protocol requests (query, prepare, execute, batch) to the query processor on the appropriate shard.',
+  'cql_server->auth_service->ref': 'Authenticates connecting CQL clients during STARTUP/AUTH_RESPONSE handshake and resolves authorized prepared statement caches.',
+  'cql_server->qos_controller->ref': 'Assigns each CQL connection to the appropriate scheduling group based on the authenticated user\'s service level.',
+  'cql_server->gossiper->ref': 'Translates endpoint lifecycle events (join/leave/up/down) into CQL protocol topology and status change events sent to registered clients.',
+
+  // --- alternator_executor ---
+  'alternator_executor->gossiper->ref': 'Resolves the local node\'s broadcast address for the DescribeEndpoints DynamoDB-compatible API call.',
+  'alternator_executor->storage_proxy->ref': 'Executes all DynamoDB-compatible read/write operations (PutItem, GetItem, Query, Scan, BatchWriteItem) by translating them into internal storage proxy calls.',
+  'alternator_executor->storage_service->ref': 'Accesses node and cluster topology information needed for Alternator table management and schema operations.',
+  'alternator_executor->migration_manager->ref': 'Performs schema changes (CreateTable, DeleteTable, UpdateTable) through the cluster\'s schema migration mechanism.',
+
+  // --- alternator_server ---
+  'alternator_server->alternator_executor->ref': 'Routes all incoming HTTP DynamoDB API requests through the executor\'s operation methods.',
+  'alternator_server->storage_proxy->ref': 'Obtains timeout configuration and service permit allocation for incoming Alternator requests.',
+  'alternator_server->gossiper->ref': 'Provides endpoint resolution and cluster state awareness in the HTTP request handling path.',
+  'alternator_server->auth_service->ref': 'Verifies AWS Signature V4 authentication on incoming Alternator HTTP requests via the key_cache and verify_signature() flow.',
+  'alternator_server->qos_controller->ref': 'Assigns Alternator request handling to the appropriate scheduling group based on the authenticated user\'s service level.',
+
+  // --- alternator_expiration ---
+  'alternator_expiration->storage_proxy->ref': 'Executes delete mutations for expired TTL items found during the periodic background scan of Alternator tables.',
+  'alternator_expiration->gossiper->ref': 'Determines which token ranges this node owns so the expiration scan only processes locally-owned partitions.',
+
+  // --- snapshot_ctl ---
+  'snapshot_ctl->database->sharded-ref': 'Enumerates keyspaces/tables and invokes snapshot creation and clearing operations on each shard\'s local database instance.',
+  'snapshot_ctl->storage_proxy->sharded-ref': 'Coordinates cluster-wide snapshot operations (take_cluster_column_family_snapshot) that require topology-aware coordination.',
+  'snapshot_ctl->task_manager->ctor-param': 'Registers a snapshot::task_manager_module to track snapshot and backup operations as managed tasks.',
+  'snapshot_ctl->storage_manager->ref': 'Handles SSTable-level storage operations during snapshot creation and backup tasks.',
+
+  // --- batchlog_manager ---
+  'batchlog_manager->query_processor->ref': 'Replays failed batches by re-executing the stored batch mutations through the CQL query processing path.',
+  'batchlog_manager->system_keyspace->ref': 'Reads and writes batchlog entries (both v1 and v2 formats) in the system.batchlog table during replay and migration.',
+  'batchlog_manager->feature_service->ref': 'Checks cluster feature flags that determine the batchlog format version (v1 vs v2) for migration and replay logic.',
+
+  // --- sstables_loader ---
+  'sstables_loader->database->sharded-ref': 'Looks up column families, loads SSTables into the local database, and accesses per-table schema for the refresh/load operation.',
+  'sstables_loader->storage_service->sharded-ref': 'Calls verify_topology_quiesced() and await_topology_quiesced() to ensure topology is stable before performing load-and-stream, and obtains the effective replication map for token ownership resolution.',
+  'sstables_loader->messaging_service->ref': 'Streams SSTables to other nodes during the load-and-stream operation when loaded SSTables contain data not owned by the local node.',
+  'sstables_loader->view_builder->sharded-ref': 'Passes view_builder to the streaming consumer during load-and-stream to coordinate materialized view building as new SSTables are loaded.',
+  'sstables_loader->view_building_worker->sharded-ref': 'Passes view_building_worker to the streaming consumer for executing view build tasks when loading SSTables that affect materialized views.',
+  'sstables_loader->task_manager->ctor-param': 'Registers a task_manager_module to track SSTable load and download operations as managed tasks.',
+  'sstables_loader->storage_manager->ref': 'Handles SSTable storage operations including object-store endpoint validation and SSTable file management during download tasks.',
+
+  // --- cache_hitrate_calculator ---
+  'cache_hitrate_calculator->database->sharded-ref': 'Collects per-table cache hit/miss statistics from all shards and recalculates optimal cache hit rates.',
+  'cache_hitrate_calculator->gossiper->ref': 'Publishes computed cache hit rate ratios as gossip application state so other nodes can make cache-aware read routing decisions.',
+
+  // --- paxos_store ---
+  'paxos_store->system_keyspace->ref': 'Persists and loads Paxos consensus state (promises, proposals, decisions) in the system.paxos table for CAS operations.',
+  'paxos_store->feature_service->ref': 'Checks whether per-table Paxos state schemas are enabled, determining how Paxos state is stored (shared vs. per-table schema).',
+  'paxos_store->database->ref': 'Looks up and creates per-table Paxos state schemas, accesses column mappings, and performs the underlying data operations for Paxos rounds.',
+  'paxos_store->migration_manager->ref': 'Listens for table drop events to clean up corresponding per-table Paxos state schemas via on_before_drop_column_family.',
+
+  // --- view_update_backlog_broker ---
+  'view_update_backlog_broker->storage_proxy->sharded-ref': 'Samples the local materialized view update backlog and determines the current backlog level for throttling decisions.',
+  'view_update_backlog_broker->gossiper->ref': 'Publishes and receives view update backlog levels via gossip, enabling cluster-wide write throttling when views fall behind.',
+
+  // --- audit ---
+  'audit->shared_token_metadata->ref': 'Resolves the local node\'s IP address from the token metadata for including in audit log entries.',
+  'audit->query_processor->ctor-param': 'Writes audit log entries to the audit table via internal CQL queries.',
+  'audit->migration_manager->ctor-param': 'Ensures the audit keyspace and table schema exist before writing audit entries.',
+
+  // --- direct_fd_pinger ---
+  'direct_fd_pinger->messaging_service->ref': 'Sends DIRECT_FD_PING RPC messages to other nodes, implementing the direct failure detector pinger interface for Raft server liveness checks.',
+
+  // --- mapreduce_service ---
+  'mapreduce_service->storage_proxy->ref': 'Executes per-shard sub-queries of a distributed aggregation and resolves effective replication maps for splitting queries across vnodes or tablets.',
+  'mapreduce_service->messaging_service->ref': 'Sends and receives map-reduce RPC messages for distributing aggregation sub-queries to remote shards.',
+  'mapreduce_service->database->sharded-ref': 'Accesses table schemas and database configuration for query planning during distributed aggregation operations.',
+
+  // --- strong_coordinator ---
+  'strong_coordinator->groups_manager->ref': 'Acquires raft::server instances via groups_manager.acquire_server(group_id) for strongly-consistent tablet read and write operations.',
+  'strong_coordinator->database->ref': 'Executes local reads directly via database.query() for strongly-consistent tablet queries, bypassing the storage_proxy layer.',
+
+  // --- groups_manager ---
+  'groups_manager->raft_group_registry->ref': 'Starts and stops raft::server instances for strongly-consistent tablet groups, and provides raft::server access to the coordinator via acquire_server().',
+  'groups_manager->messaging_service->ref': 'Sends and receives Raft RPC messages (vote, append_entries, etc.) for the tablet-level strongly-consistent Raft groups via the inner rpc_impl class.',
+  'groups_manager->query_processor->ref': 'Creates raft_sys_table_storage instances for persistent Raft log storage when starting new tablet Raft groups.',
+  'groups_manager->database->ref': 'Accesses table/schema metadata when managing tablet Raft groups and resolving tablet-to-table mappings.',
+  'groups_manager->shared_token_metadata->ref': 'Receives token_metadata_ptr via the update() method to track which tablets need Raft groups started or stopped.',
+  'groups_manager->feature_service->ref': 'Checks whether the strongly-consistent tablets feature is enabled before starting Raft groups for newly assigned tablets.',
+
+  // --- client_routes ---
+  'client_routes->query_processor->ref': 'Executes CQL queries against the system.client_routes table for reading and writing client routing entries.',
+  'client_routes->feature_service->ref': 'Checks whether the CLIENT_ROUTES cluster feature is enabled before activating client route management.',
+
+  // --- task_manager ---
+  'task_manager->messaging_service->raw-ptr': 'Registers and handles task-manager-specific RPC verbs for cross-node task status queries and coordination; set late via init_ms_handlers().',
+};
+
+// Class edges: [source, target, depType, strength]
+// strength: 1-8 (usage count of this dependency within the service)
+//   1 = single mention, 8 = pervasive usage throughout the class
+const classEdges = [
+  // --- storage_service (the mega hub) ---
+  ['storage_service','database','sharded-ref',3],
+  ['storage_service','gossiper','ref',3],
+  ['storage_service','messaging_service','sharded-ref',3],
+  ['storage_service','migration_manager','sharded-ref',2],
+  ['storage_service','query_processor','ref',2],
+  ['storage_service','repair_service','sharded-ref',2],
+  ['storage_service','stream_manager','sharded-ref',2],
+  ['storage_service','snitch','sharded-ref',1],
+  ['storage_service','qos_controller','sharded-ref',1],
+  ['storage_service','auth_service','ref',1],
+  ['storage_service','raft_group_registry','raw-ptr',2],
+  ['storage_service','shared_token_metadata','ref',3],
+  ['storage_service','system_keyspace','sharded-ref',2],
+  ['storage_service','cdc_generation','sharded-ref',1],
+  ['storage_service','view_builder','sharded-ref',1],
+  ['storage_service','feature_service','ref',2],
+  ['storage_service','task_manager','ctor-param',1],
+  ['storage_service','address_map','ref',2],
+  ['storage_service','erm_factory','ref',2],
+  ['storage_service','gossiper','observer',3],
+
+  // --- storage_proxy ---
+  ['storage_proxy','database','sharded-ref',3],
+  ['storage_proxy','shared_token_metadata','ref',3],
+  ['storage_proxy','feature_service','ref',2],
+  ['storage_proxy','messaging_service','raw-ptr',3],
+  ['storage_proxy','gossiper','raw-ptr',2],
+  ['storage_proxy','migration_manager','raw-ptr',2],
+  ['storage_proxy','system_keyspace','raw-ptr',2],
+  ['storage_proxy','raft_group_registry','raw-ptr',2],
+  ['storage_proxy','cdc_generation','raw-ptr',1],
+  ['storage_proxy','erm_factory','ref',2],
+
+  // --- migration_manager ---
+  ['migration_manager','messaging_service','ref',2],
+  ['migration_manager','storage_proxy','ref',2],
+  ['migration_manager','gossiper','ref',2],
+  ['migration_manager','feature_service','ref',1],
+  ['migration_manager','raft_group_registry','ref',2],
+  ['migration_manager','system_keyspace','sharded-ref',1],
+  ['migration_manager','storage_service','pluggable',2],
+  ['migration_manager','gossiper','observer',3],
+
+  // --- raft_group_registry ---
+  ['raft_group_registry','messaging_service','sharded-ref',2],
+  ['raft_group_registry','gossiper','ref',2],
+  ['raft_group_registry','feature_service','ref',1],
+  ['raft_group_registry','storage_service','method-param',1],
+  ['raft_group_registry','query_processor','method-param',1],
+  ['raft_group_registry','migration_manager','method-param',1],
+  ['raft_group_registry','system_keyspace','method-param',1],
+
+  // --- gossiper ---
+  ['gossiper','shared_token_metadata','ref',2],
+  ['gossiper','messaging_service','ref',3],
+  ['gossiper','address_map','ref',2],
+
+  // --- messaging_service ---
+  ['messaging_service','feature_service','ref',2],
+  ['messaging_service','qos_controller','ref',1],
+  ['messaging_service','shared_token_metadata','raw-ptr',1],
+  ['messaging_service','address_map','ref',2],
+
+  // --- database ---
+  ['database','compaction_manager','ref',3],
+  ['database','feature_service','ref',1],
+  ['database','shared_token_metadata','ref',2],
+  ['database','qos_controller','pluggable',1],
+  ['database','system_keyspace','pluggable',1],
+  ['database','view_update_generator','pluggable',2],
+  ['database','erm_factory','method-param',1],
+
+  // --- stream_manager ---
+  ['stream_manager','database','sharded-ref',2],
+  ['stream_manager','messaging_service','sharded-ref',2],
+  ['stream_manager','migration_manager','sharded-ref',1],
+  ['stream_manager','gossiper','ref',2],
+  ['stream_manager','view_builder','ref',1],
+  ['stream_manager','gossiper','observer',2],
+
+  // --- repair_service ---
+  ['repair_service','database','sharded-ref',2],
+  ['repair_service','storage_proxy','sharded-ref',2],
+  ['repair_service','gossiper','sharded-ref',2],
+  ['repair_service','messaging_service','ref',2],
+  ['repair_service','system_keyspace','sharded-ref',1],
+  ['repair_service','view_builder','ref',1],
+  ['repair_service','migration_manager','ref',1],
+  ['repair_service','shared_token_metadata','sharded-ref',1],
+  ['repair_service','task_manager','ctor-param',1],
+
+  // --- system_keyspace ---
+  ['system_keyspace','query_processor','ref',2],
+  ['system_keyspace','database','ref',2],
+  ['system_keyspace','erm_factory','method-param',1],
+
+  // --- auth_service ---
+  ['auth_service','query_processor','ref',2],
+  ['auth_service','raft_group_registry','ref',1],
+  ['auth_service','auth_cache','ref',2],
+
+  // --- auth_cache ---
+  ['auth_cache','query_processor','ref',2],
+
+  // --- view_builder ---
+  ['view_builder','database','ref',2],
+  ['view_builder','system_keyspace','ref',1],
+  ['view_builder','query_processor','ref',1],
+  ['view_builder','raft_group_registry','ref',1],
+  ['view_builder','view_update_generator','ref',2],
+  ['view_builder','migration_manager','raw-ptr',1],
+
+  // --- view_building_worker ---
+  ['view_building_worker','database','ref',2],
+  ['view_building_worker','system_keyspace','ref',1],
+  ['view_building_worker','messaging_service','ref',1],
+  ['view_building_worker','view_update_generator','ref',2],
+  ['view_building_worker','raft_group_registry','ref',1],
+
+  // --- view_update_generator ---
+  ['view_update_generator','database','ref',2],
+  ['view_update_generator','storage_proxy','sharded-ref',2],
+
+  // --- cdc_generation ---
+  ['cdc_generation','gossiper','ref',2],
+  ['cdc_generation','system_keyspace','sharded-ref',1],
+  ['cdc_generation','shared_token_metadata','ref',2],
+  ['cdc_generation','feature_service','ref',1],
+  ['cdc_generation','database','ref',1],
+  ['cdc_generation','gossiper','observer',2],
+
+  // --- cdc_service ---
+  ['cdc_service','storage_proxy','ref',2],
+
+  // --- compaction_manager ---
+  ['compaction_manager','system_keyspace','pluggable',1],
+  ['compaction_manager','task_manager','ctor-param',1],
+
+  // --- qos_controller ---
+  ['qos_controller','auth_service','sharded-ref',1],
+  ['qos_controller','shared_token_metadata','ref',1],
+
+  // --- task_manager ---
+  ['task_manager','messaging_service','raw-ptr',1],
+
+  // --- cql_server ---
+  ['cql_server','query_processor','sharded-ref',3],
+  ['cql_server','auth_service','ref',2],
+  ['cql_server','qos_controller','ref',1],
+  ['cql_server','gossiper','ref',1],
+
+  // --- query_processor ---
+  ['query_processor','storage_proxy','ref',3],
+  ['query_processor','vector_store_client','ref',1],
+  ['query_processor','lang_manager','ref',1],
+  ['query_processor','migration_manager','method-param',1],
+  ['query_processor','mapreduce_service','method-param',1],
+  ['query_processor','strong_coordinator','method-param',1],
+  ['query_processor','raft_group_registry','method-param',1],
+
+  // --- alternator_executor ---
+  ['alternator_executor','gossiper','ref',2],
+  ['alternator_executor','storage_proxy','ref',2],
+  ['alternator_executor','storage_service','ref',1],
+  ['alternator_executor','migration_manager','ref',1],
+
+  // --- alternator_server ---
+  ['alternator_server','alternator_executor','ref',2],
+  ['alternator_server','storage_proxy','ref',2],
+  ['alternator_server','gossiper','ref',1],
+  ['alternator_server','auth_service','ref',1],
+  ['alternator_server','qos_controller','ref',1],
+
+  // --- alternator_expiration ---
+  ['alternator_expiration','storage_proxy','ref',2],
+  ['alternator_expiration','gossiper','ref',1],
+
+  // --- snapshot_ctl ---
+  ['snapshot_ctl','database','sharded-ref',2],
+  ['snapshot_ctl','storage_proxy','sharded-ref',1],
+  ['snapshot_ctl','task_manager','ctor-param',1],
+  ['snapshot_ctl','storage_manager','ref',1],
+
+  // --- batchlog_manager ---
+  ['batchlog_manager','query_processor','ref',2],
+  ['batchlog_manager','system_keyspace','ref',1],
+  ['batchlog_manager','feature_service','ref',1],
+
+  // --- sstables_loader ---
+  ['sstables_loader','database','sharded-ref',2],
+  ['sstables_loader','storage_service','sharded-ref',2],
+  ['sstables_loader','messaging_service','ref',1],
+  ['sstables_loader','view_builder','sharded-ref',1],
+  ['sstables_loader','view_building_worker','sharded-ref',1],
+  ['sstables_loader','task_manager','ctor-param',1],
+  ['sstables_loader','storage_manager','ref',1],
+
+  // --- cache_hitrate_calculator ---
+  ['cache_hitrate_calculator','database','sharded-ref',2],
+  ['cache_hitrate_calculator','gossiper','ref',1],
+
+  // --- paxos_store ---
+  ['paxos_store','system_keyspace','ref',2],
+  ['paxos_store','feature_service','ref',1],
+  ['paxos_store','database','ref',2],
+  ['paxos_store','migration_manager','ref',1],
+
+  // --- view_update_backlog_broker ---
+  ['view_update_backlog_broker','storage_proxy','sharded-ref',2],
+  ['view_update_backlog_broker','gossiper','ref',1],
+
+  // --- tracing ---
+  // tracing has no ctor deps on known sharded services
+
+  // --- audit ---
+  ['audit','shared_token_metadata','ref',1],
+  ['audit','query_processor','ctor-param',1],
+  ['audit','migration_manager','ctor-param',1],
+
+  // --- direct_fd_pinger ---
+  ['direct_fd_pinger','messaging_service','ref',1],
+
+  // --- mapreduce_service ---
+  ['mapreduce_service','storage_proxy','ref',2],
+  ['mapreduce_service','messaging_service','ref',1],
+  ['mapreduce_service','database','sharded-ref',1],
+
+  // --- strong_coordinator ---
+  ['strong_coordinator','groups_manager','ref',2],
+  ['strong_coordinator','database','ref',2],
+
+  // --- groups_manager ---
+  ['groups_manager','raft_group_registry','ref',2],
+  ['groups_manager','messaging_service','ref',1],
+  ['groups_manager','query_processor','ref',1],
+  ['groups_manager','database','ref',1],
+  ['groups_manager','shared_token_metadata','ref',1],
+  ['groups_manager','feature_service','ref',1],
+
+  // --- client_routes ---
+  ['client_routes','query_processor','ref',1],
+  ['client_routes','feature_service','ref',1],
+];
+
+
+// =============================================================================
+// ENGINE
+// =============================================================================
+
+const svg = d3.select('#graph');
+const width = window.innerWidth;
+const height = window.innerHeight - 48;
+
+let selectedNode = null;
+let simulation = null;
+
+// Analysis mode state
+let analysisMode = null;    // null | 'path'
+let pathSource = null;      // node id for path finder start
+let pathTarget = null;      // node id for path finder end
+let currentNodes = [];      // live references to rendered nodes
+let currentEdges = [];      // live references to rendered edges
+let currentNodeSel = null;  // d3 selection for nodes
+let currentLinkSel = null;  // d3 selection for links
+
+// Theme helpers — read CSS variables at runtime
+function css(varName) {
+  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
+
+// Main group for zoom/pan
+const container = svg.append('g');
+const edgeGroup = container.append('g').attr('class', 'edges');
+const nodeGroup = container.append('g').attr('class', 'nodes');
+
+// Zoom behavior
+const zoom = d3.zoom()
+  .scaleExtent([0.15, 4])
+  .on('zoom', (e) => container.attr('transform', e.transform));
+svg.call(zoom);
+
+// Arrow markers
+const defs = svg.append('defs');
+
+function createMarker(id, color) {
+  defs.append('marker')
+    .attr('id', id)
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 10)
+    .attr('refY', 0)
+    .attr('markerWidth', 5)
+    .attr('markerHeight', 5)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-4L10,0L0,4')
+    .attr('fill', color);
+}
+
+function rebuildMarkers() {
+  defs.selectAll('marker').remove();
+  createMarker('arrow-default', css('--edge-color'));
+  createMarker('arrow-highlight', css('--edge-highlight'));
+  Object.keys(DEP_TYPES).forEach(k => createMarker('arrow-dep-'+k, DEP_TYPES[k].color));
+  createMarker('arrow-mutual', '#e53e3e');
+}
+rebuildMarkers();
+
+// Glow filter
+const glowFilter = defs.append('filter').attr('id', 'glow');
+glowFilter.append('feGaussianBlur').attr('stdDeviation', 2.5).attr('result', 'blur');
+glowFilter.append('feMerge').selectAll('feMergeNode')
+  .data(['blur', 'SourceGraphic']).join('feMergeNode').attr('in', d => d);
+
+const infoPanel = d3.select('#infoPanel');
+const depDetailPanel = d3.select('#depDetailPanel');
+
+// =============================================================================
+// RENDER FUNCTIONS
+// =============================================================================
+
+function getNodeColor(node) {
+  return LAYERS[node.layer]?.color || css('--text-muted');
+}
+
+// Edge visual weight helpers (global so analysis functions can access them)
+function edgeStrokeWidth(s) {
+  if (s <= 1) return 0.5;
+  if (s <= 2) return 0.8;
+  if (s <= 3) return 1.2;
+  if (s <= 4) return 1.6;
+  if (s <= 5) return 2.1;
+  if (s <= 6) return 2.7;
+  if (s <= 7) return 3.4;
+  return 4.2;
+}
+function edgeDash(s, type) {
+  if (type === 'raw-ptr' || type === 'pluggable' || type === 'method-param') {
+    if (s <= 2) return '3,5';
+    if (s <= 4) return '6,4';
+    return '8,3';
+  }
+  if (s <= 1) return '2,5';
+  if (s <= 2) return '4,4';
+  if (s <= 3) return '8,3';
+  if (s <= 4) return '12,3';
+  return 'none';
+}
+function edgeOpacity(s) {
+  return 0.15 + Math.min(s, 8) * 0.08;
+}
+function edgeColor(d) {
+  if (d.mutual) return '#e53e3e';
+  return DEP_TYPES[d.type]?.color || css('--edge-color');
+}
+
+
+function renderClassView() {
+  edgeGroup.selectAll('*').remove();
+  nodeGroup.selectAll('*').remove();
+  if (simulation) simulation.stop();
+  simulation = null;
+
+  const nodes = classNodes.map(d => ({...d, radius: 28}));
+  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+  // Deduplicate edges (keep highest strength for duplicates with same source->target)
+  const edgeMap = {};
+  classEdges.forEach(([s,t,type,strength]) => {
+    if (!nodeMap[s] || !nodeMap[t]) return;
+    const key = s + '->' + t + '->' + type;
+    if (!edgeMap[key] || edgeMap[key].strength < strength) {
+      edgeMap[key] = { source: s, target: t, type, strength };
+    }
+  });
+  const edges = Object.values(edgeMap);
+
+  // Detect mutual (bidirectional) dependencies: A→B and B→A both exist
+  const directedPairs = new Set();
+  edges.forEach(e => directedPairs.add(e.source + '->' + e.target));
+  edges.forEach(e => {
+    e.mutual = directedPairs.has(e.target + '->' + e.source);
+  });
+
+  // Node sizes from in-degree
+  const inDeg = {};
+  edges.forEach(e => { inDeg[e.target] = (inDeg[e.target] || 0) + e.strength; });
+  const maxIn = Math.max(1, ...Object.values(inDeg));
+  nodes.forEach(n => {
+    n.radius = 22 + ((inDeg[n.id] || 0) / maxIn) * 22;
+  });
+
+  // Compute pill half-widths based on text length
+  nodes.forEach(n => {
+    const textLen = n.id.replace(/_/g, ' ').length;
+    n.pillW = Math.min(Math.max(n.radius * 1.4, textLen * 3.4 + 10), 80);
+  });
+
+  // --- LAYERED LAYOUT ---
+  const cLayerOrder = ['storage','cluster','services','query','api'];
+  const svgW = window.innerWidth;
+  const svgH = window.innerHeight - 48;
+
+  // Tier Y positions: bottom = storage, top = api
+  const usableH = svgH * 3;
+  const tierCount = cLayerOrder.length;
+  const tierSpacing = usableH / (tierCount + 1);
+  const tierY = {};
+  cLayerOrder.forEach((l, i) => {
+    tierY[l] = usableH - tierSpacing * (i + 1);
+  });
+
+  // Group nodes by layer
+  const layerGroups = {};
+  cLayerOrder.forEach(l => { layerGroups[l] = []; });
+  nodes.forEach(n => { if (layerGroups[n.layer]) layerGroups[n.layer].push(n); });
+
+  // Sort nodes within each layer by connectivity (highest in center)
+  const connectivity = {};
+  edges.forEach(e => {
+    connectivity[e.source] = (connectivity[e.source] || 0) + e.strength;
+    connectivity[e.target] = (connectivity[e.target] || 0) + e.strength;
+  });
+  Object.keys(layerGroups).forEach(l => {
+    const group = layerGroups[l];
+    group.sort((a, b) => (connectivity[b.id] || 0) - (connectivity[a.id] || 0));
+    const centered = [];
+    group.forEach((n, i) => {
+      if (i % 2 === 0) centered.push(n);
+      else centered.unshift(n);
+    });
+    layerGroups[l] = centered;
+  });
+
+  // Assign X positions with adaptive spacing based on pill widths
+  const usableW = svgW * 3;
+  Object.keys(layerGroups).forEach(l => {
+    const group = layerGroups[l];
+    const count = group.length;
+    if (count === 0) return;
+    if (count === 1) { group[0].x = usableW / 2; group[0].y = tierY[group[0].layer]; group[0].tierY = tierY[group[0].layer]; return; }
+    // Compute total span: sum of adjacent pill half-widths + gaps
+    const gap = 20;
+    let totalNeeded = 0;
+    for (let i = 0; i < count - 1; i++) {
+      totalNeeded += group[i].pillW + group[i + 1].pillW + gap;
+    }
+    // Scale down only if it exceeds usable width
+    const sc = totalNeeded > usableW - 200 ? (usableW - 200) / totalNeeded : 1;
+    const startX = (usableW - totalNeeded * sc) / 2;
+    let xCursor = startX;
+    group.forEach((n, i) => {
+      if (i === 0) {
+        n.x = xCursor;
+      } else {
+        xCursor += (group[i - 1].pillW + n.pillW + gap) * sc;
+        n.x = xCursor;
+      }
+      n.y = tierY[n.layer];
+      n.tierY = tierY[n.layer];
+    });
+  });
+
+  // Draw tier background bands
+  drawTierBands(cLayerOrder, tierY, usableW, tierSpacing);
+
+  // Edges — 8-level visual weight based on usage count (strength 1-8)
+  // Level 1-2: dotted, thin  |  3-4: dashed, medium  |  5-6: solid, medium  |  7-8: solid, bold
+  const link = edgeGroup.selectAll('path')
+    .data(edges)
+    .join('path')
+    .attr('fill', 'none')
+    .attr('stroke', d => edgeColor(d))
+    .attr('stroke-width', d => edgeStrokeWidth(d.strength))
+    .attr('stroke-opacity', d => d.mutual ? 0.8 : edgeOpacity(d.strength))
+    .attr('stroke-dasharray', d => edgeDash(d.strength, d.type))
+    .attr('stroke-linecap', 'round')
+    .attr('marker-end', d => d.mutual ? 'url(#arrow-mutual)' : 'url(#arrow-dep-' + d.type + ')');
+
+  // Draw edges with bezier curves
+  updateEdges(link, nodeMap);
+
+  // Store global references for analysis functions
+  currentNodes = nodes;
+  currentEdges = edges;
+
+  // Node groups
+  const node = nodeGroup.selectAll('g')
+    .data(nodes)
+    .join('g')
+    .attr('cursor', 'pointer')
+    .attr('transform', d => `translate(${d.x},${d.y})`);
+
+  // Store selections globally
+  currentNodeSel = node;
+  currentLinkSel = link;
+
+  // Drag behavior (horizontal only in layered mode)
+  node.call(d3.drag()
+    .on('start', function(e, d) { d._dragging = true; })
+    .on('drag', function(e, d) {
+      d.x = e.x;
+      d3.select(this).attr('transform', `translate(${d.x},${d.y})`);
+      updateEdges(link, nodeMap);
+    })
+    .on('end', function(e, d) { d._dragging = false; })
+  );
+
+  // Node pill shape
+  const cFillOp = parseFloat(css('--node-fill-opacity'));
+  const cStrokeOp = parseFloat(css('--node-stroke-opacity'));
+  const cTextShadow = css('--text-shadow-node');
+  const cMuted = css('--text-muted');
+
+  node.append('rect')
+    .attr('x', d => -d.pillW)
+    .attr('y', d => -d.radius * 0.65)
+    .attr('width', d => d.pillW * 2)
+    .attr('height', d => d.radius * 1.3)
+    .attr('rx', d => d.radius * 0.45)
+    .attr('fill', d => getNodeColor(d))
+    .attr('fill-opacity', cFillOp)
+    .attr('stroke', d => getNodeColor(d))
+    .attr('stroke-width', 1.5)
+    .attr('stroke-opacity', cStrokeOp)
+    .style('filter', 'url(#glow)')
+    .style('transition', 'fill-opacity 0.3s, stroke-opacity 0.3s');
+
+  // Class name
+  node.append('text')
+    .text(d => d.id.replace(/_/g, ' '))
+    .attr('text-anchor', 'middle')
+    .attr('dy', '-0.1em')
+    .attr('fill', d => getNodeColor(d))
+    .attr('font-size', d => Math.max(8.5, Math.min(11, d.radius * 0.35)))
+    .attr('font-weight', 600)
+    .attr('pointer-events', 'none')
+    .style('text-shadow', cTextShadow);
+
+  // Namespace
+  node.append('text')
+    .text(d => d.ns)
+    .attr('text-anchor', 'middle')
+    .attr('dy', '1.15em')
+    .attr('fill', cMuted)
+    .attr('font-size', d => Math.max(8, Math.min(10, d.radius * 0.3)))
+    .attr('pointer-events', 'none');
+
+  // Interactivity
+  node.on('mouseover', (e, d) => {
+    if (selectedNode || analysisMode) return;
+    highlightClassNode(d, nodes, edges, node, link);
+  }).on('mouseout', () => {
+    if (selectedNode || analysisMode) return;
+    resetClassHighlight(node, link);
+  }).on('click', (e, d) => {
+    e.stopPropagation();
+
+    // Path finder mode
+    if (analysisMode === 'path') {
+      if (!pathSource) {
+        pathSource = d.id;
+        // Highlight source node
+        node.select('rect')
+          .attr('stroke-width', n => n.id === d.id ? 3.5 : 1.5)
+          .attr('stroke', n => n.id === d.id ? css('--accent') : getNodeColor(n));
+        document.getElementById('pathHint').textContent = 'Now click the target node';
+        return;
+      } else if (d.id !== pathSource) {
+        pathTarget = d.id;
+        selectedNode = d.id;
+        applyPathHighlight(pathSource, pathTarget);
+        document.getElementById('pathHint').classList.remove('visible');
+        return;
+      }
+      return;
+    }
+
+    // Normal click behavior
+    if (selectedNode === d.id) { selectedNode = null; resetClassHighlight(node, link); hideInfoPanel(); return; }
+    selectedNode = d.id;
+    highlightClassNode(d, nodes, edges, node, link);
+    showClassInfo(d, edges);
+  });
+
+  svg.on('click', () => {
+    if (analysisMode) {
+      clearAnalysis();
+      hideInfoPanel();
+      return;
+    }
+    selectedNode = null;
+    resetClassHighlight(node, link);
+    hideInfoPanel();
+  });
+
+  // Auto-fit
+  zoomToFit(nodes, 100);
+
+  d3.select('#stats').text(nodes.length + ' classes, ' + edges.length + ' dependencies');
+}
+
+
+// =============================================================================
+// LAYERED LAYOUT HELPERS
+// =============================================================================
+
+// Background group for tier bands (inserted before edges)
+const tierGroup = container.insert('g', ':first-child').attr('class', 'tiers');
+
+function drawTierBands(layerOrder, tierY, usableW, tierSpacing) {
+  tierGroup.selectAll('*').remove();
+
+  const bandOp = parseFloat(css('--band-opacity'));
+  const tierLabelOp = parseFloat(css('--tier-label-opacity'));
+  const guideOp = parseFloat(css('--guide-line-opacity'));
+
+  layerOrder.forEach((l, i) => {
+    const y = tierY[l];
+    const bandH = tierSpacing * 0.85;
+
+    // Subtle background band
+    tierGroup.append('rect')
+      .attr('x', -500)
+      .attr('y', y - bandH / 2)
+      .attr('width', usableW + 1000)
+      .attr('height', bandH)
+      .attr('fill', LAYERS[l]?.color || css('--text-muted'))
+      .attr('fill-opacity', bandOp)
+      .attr('rx', 8);
+
+    // Tier label on the left side (positioned relative to node area)
+    tierGroup.append('text')
+      .text(LAYERS[l]?.label || l)
+      .attr('x', usableW / 2)
+      .attr('y', y - bandH / 2 + 18)
+      .attr('text-anchor', 'middle')
+      .attr('fill', LAYERS[l]?.color || css('--text-muted'))
+      .attr('fill-opacity', tierLabelOp)
+      .attr('font-size', 13)
+      .attr('font-weight', 700)
+      .attr('letter-spacing', '1px')
+      .attr('pointer-events', 'none');
+
+    // Horizontal guide line
+    tierGroup.append('line')
+      .attr('x1', -500)
+      .attr('x2', usableW + 1000)
+      .attr('y1', y)
+      .attr('y2', y)
+      .attr('stroke', LAYERS[l]?.color || css('--text-muted'))
+      .attr('stroke-opacity', guideOp)
+      .attr('stroke-width', 1)
+      .attr('stroke-dasharray', '6,8');
+  });
+}
+
+function updateEdges(linkSelection, nodeMap) {
+  linkSelection.attr('d', d => {
+    const src = typeof d.source === 'object' ? d.source : nodeMap[d.source];
+    const tgt = typeof d.target === 'object' ? d.target : nodeMap[d.target];
+    if (!src || !tgt) return '';
+    const sx = src.x, sy = src.y;
+    const tx = tgt.x, ty = tgt.y;
+    const dy = ty - sy;
+    const dx = tx - sx;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 1) return '';
+
+    // Offset start/end by node radius so edges start/end at boundary
+    const srcR = src.pillW || src.radius || 20;
+    const tgtR = tgt.pillW || tgt.radius || 20;
+
+    // For same-tier edges, use a raised arc
+    if (Math.abs(dy) < 10) {
+      const arc = Math.max(40, Math.abs(dx) * 0.35);
+      // Start and end from top of node
+      const sy0 = sy - (src.radius || 20) * 0.6;
+      const ty0 = ty - (tgt.radius || 20) * 0.6;
+      return `M${sx},${sy0} C${sx},${sy0 - arc} ${tx},${ty0 - arc} ${tx},${ty0}`;
+    }
+
+    // Vertical direction: if target is below source, edge exits bottom and enters top
+    const goingDown = dy > 0;
+    const srcRy = (src.radius || 20) * 0.65;
+    const tgtRy = (tgt.radius || 20) * 0.65;
+    const sy0 = goingDown ? sy + srcRy : sy - srcRy;
+    const ty0 = goingDown ? ty - tgtRy : ty + tgtRy;
+    const effDy = ty0 - sy0;
+
+    // Vertical bezier: control points at 40% of the vertical distance
+    const cp = Math.abs(effDy) * 0.4;
+    return `M${sx},${sy0} C${sx},${sy0 + Math.sign(effDy) * cp} ${tx},${ty0 - Math.sign(effDy) * cp} ${tx},${ty0}`;
+  });
+}
+
+
+// =============================================================================
+// ZOOM TO FIT
+// =============================================================================
+
+function zoomToFit(nodes, padding) {
+  if (!nodes.length) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  nodes.forEach(n => {
+    const r = (n.pillW || n.radius || 30) + 20;
+    if (n.x - r < x0) x0 = n.x - r;
+    if (n.y - r < y0) y0 = n.y - r;
+    if (n.x + r > x1) x1 = n.x + r;
+    if (n.y + r > y1) y1 = n.y + r;
+  });
+  const bw = x1 - x0;
+  const bh = y1 - y0;
+  if (bw <= 0 || bh <= 0) return;
+  const svgW = window.innerWidth;
+  const svgH = window.innerHeight - 48;
+  const scale = Math.min((svgW - padding * 2) / bw, (svgH - padding * 2) / bh, 1.5);
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  const tx = svgW / 2 - cx * scale;
+  const ty = svgH / 2 - cy * scale;
+  svg.transition().duration(800).ease(d3.easeCubicOut)
+    .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+}
+
+function panToNode(d) {
+  const svgW = window.innerWidth;
+  const svgH = window.innerHeight - 48;
+  // Get current zoom scale, keep it (but clamp to a reasonable minimum)
+  const curTransform = d3.zoomTransform(svg.node());
+  const scale = Math.max(curTransform.k, 0.6);
+  // Offset x to account for info panel (~300px on left)
+  const panelOffset = infoPanel.classed('visible') ? 150 : 0;
+  const tx = (svgW / 2 + panelOffset) - d.x * scale;
+  const ty = svgH / 2 - d.y * scale;
+  svg.transition().duration(500).ease(d3.easeCubicOut)
+    .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+}
+
+function selectNode(nodeId) {
+  if (!currentNodes || !currentEdges) return;
+  const d = currentNodes.find(n => n.id === nodeId);
+  if (!d) return;
+  selectedNode = d.id;
+  highlightClassNode(d, currentNodes, currentEdges, currentNodeSel, currentLinkSel);
+  showClassInfo(d, currentEdges);
+  panToNode(d);
+}
+
+
+// =============================================================================
+// HIGHLIGHT
+// =============================================================================
+
+function highlightClassNode(d, nodes, edges, nodeSelection, linkSelection) {
+  const connected = new Set();
+  connected.add(d.id);
+  edges.forEach(e => {
+    const sid = typeof e.source === 'object' ? e.source.id : e.source;
+    const tid = typeof e.target === 'object' ? e.target.id : e.target;
+    if (sid === d.id) connected.add(tid);
+    if (tid === d.id) connected.add(sid);
+  });
+
+  nodeSelection.select('rect')
+    .attr('fill-opacity', n => connected.has(n.id) ? 0.2 : 0.02)
+    .attr('stroke-opacity', n => connected.has(n.id) ? 1 : 0.1)
+    .attr('stroke-width', n => n.id === d.id ? 3 : connected.has(n.id) ? 2 : 1);
+  nodeSelection.selectAll('text')
+    .attr('fill-opacity', n => connected.has(n.id) ? 1 : 0.1);
+
+  linkSelection
+    .attr('stroke-opacity', e => {
+      const sid = typeof e.source === 'object' ? e.source.id : e.source;
+      const tid = typeof e.target === 'object' ? e.target.id : e.target;
+      if (sid === d.id || tid === d.id) return 0.85;
+      return 0.03;
+    });
+}
+
+function resetClassHighlight(nodeSelection, linkSelection) {
+  const fillOp = parseFloat(css('--node-fill-opacity'));
+  const strokeOp = parseFloat(css('--node-stroke-opacity'));
+  nodeSelection.select('rect')
+    .attr('fill-opacity', fillOp)
+    .attr('stroke-opacity', strokeOp)
+    .attr('stroke-width', 1.5);
+  nodeSelection.selectAll('text').attr('fill-opacity', 1);
+  linkSelection.attr('stroke-opacity', d => d.mutual ? 0.8 : (0.15 + Math.min(d.strength, 8) * 0.08));
+}
+
+
+// =============================================================================
+// TOOLTIPS / INFO PANEL
+// =============================================================================
+
+function hideInfoPanel() { infoPanel.classed('visible', false); depDetailPanel.classed('visible', false); }
+
+function showClassInfo(d, edges) {
+  d3.select('#infoDot').style('background', getNodeColor(d));
+  d3.select('#infoTitle').text(d.ns + '::' + d.id);
+
+  const outEdges = edges.filter(e => {
+    const sid = typeof e.source === 'object' ? e.source.id : e.source;
+    return sid === d.id;
+  }).sort((a,b) => b.strength - a.strength);
+  const inEdges = edges.filter(e => {
+    const tid = typeof e.target === 'object' ? e.target.id : e.target;
+    return tid === d.id;
+  }).sort((a,b) => b.strength - a.strength);
+
+  const nodeMap = Object.fromEntries(classNodes.map(n => [n.id, n]));
+  const muted = css('--text-muted');
+
+  let html = '<p>' + d.desc + '</p>';
+
+  if (outEdges.length) {
+    html += '<h3>Depends on (' + outEdges.length + ')</h3><ul class="dep-list">';
+    outEdges.forEach(e => {
+      const tid = typeof e.target === 'object' ? e.target.id : e.target;
+      const tn = nodeMap[tid];
+      const c = DEP_TYPES[e.type]?.color || muted;
+      const tLabel = tn ? tn.ns + '::' + tid : tid;
+      const depKey = d.id + '->' + tid + '->' + e.type;
+      html += '<li data-node-id="'+tid+'" data-dep-key="'+depKey+'" data-dep-strength="'+e.strength+'" data-dep-dir="out"><span class="dep-dot" style="background:'+c+'"></span>' + tLabel + ' <span class="dep-type">' + e.type + '</span></li>';
+    });
+    html += '</ul>';
+  }
+  if (inEdges.length) {
+    html += '<h3>Depended on by (' + inEdges.length + ')</h3><ul class="dep-list">';
+    inEdges.forEach(e => {
+      const sid = typeof e.source === 'object' ? e.source.id : e.source;
+      const sn = nodeMap[sid];
+      const c = DEP_TYPES[e.type]?.color || muted;
+      const sLabel = sn ? sn.ns + '::' + sid : sid;
+      const depKey = sid + '->' + d.id + '->' + e.type;
+      html += '<li data-node-id="'+sid+'" data-dep-key="'+depKey+'" data-dep-strength="'+e.strength+'" data-dep-dir="in"><span class="dep-dot" style="background:'+c+'"></span>' + sLabel + ' <span class="dep-type">' + e.type + '</span></li>';
+    });
+    html += '</ul>';
+  }
+
+  d3.select('#infoBody').html(html);
+  infoPanel.classed('visible', true);
+}
+
+
+// =============================================================================
+// GRAPH ALGORITHMS
+// =============================================================================
+
+// BFS shortest directed path from src to dst
+function bfsPath(srcId, dstId, edges) {
+  const adj = {};
+  edges.forEach(e => {
+    const sid = typeof e.source === 'object' ? e.source.id : e.source;
+    const tid = typeof e.target === 'object' ? e.target.id : e.target;
+    if (!adj[sid]) adj[sid] = [];
+    adj[sid].push(tid);
+  });
+  const visited = new Set([srcId]);
+  const parent = {};
+  const queue = [srcId];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur === dstId) {
+      // reconstruct
+      const path = [];
+      let n = dstId;
+      while (n !== srcId) {
+        path.unshift(n);
+        n = parent[n];
+      }
+      path.unshift(srcId);
+      return path;
+    }
+    (adj[cur] || []).forEach(nb => {
+      if (!visited.has(nb)) {
+        visited.add(nb);
+        parent[nb] = cur;
+        queue.push(nb);
+      }
+    });
+  }
+  return null; // no path
+}
+
+
+// =============================================================================
+// ANALYSIS HIGHLIGHT FUNCTIONS
+// =============================================================================
+
+function applyPathHighlight(srcId, dstId) {
+  if (!currentNodeSel || !currentLinkSel) return;
+  const path = bfsPath(srcId, dstId, currentEdges);
+
+  if (!path) {
+    d3.select('#infoDot').style('background', css('--accent'));
+    d3.select('#infoTitle').text('Path Finder');
+    d3.select('#infoBody').html('<p>No directed path found from <strong>' + srcId.replace(/_/g,' ') + '</strong> to <strong>' + dstId.replace(/_/g,' ') + '</strong>.</p>');
+    infoPanel.classed('visible', true);
+    return;
+  }
+
+  const pathSet = new Set(path);
+  const pathEdges = new Set();
+  for (let i = 0; i < path.length - 1; i++) {
+    pathEdges.add(path[i] + '->' + path[i+1]);
+  }
+
+  const accentColor = css('--accent');
+
+  currentNodeSel.select('rect')
+    .attr('fill-opacity', n => pathSet.has(n.id) ? 0.25 : 0.02)
+    .attr('stroke-opacity', n => pathSet.has(n.id) ? 1 : 0.08)
+    .attr('stroke-width', n => {
+      if (n.id === srcId || n.id === dstId) return 3.5;
+      if (pathSet.has(n.id)) return 2.5;
+      return 1;
+    })
+    .attr('stroke', n => {
+      if (pathSet.has(n.id)) return accentColor;
+      return getNodeColor(n);
+    });
+
+  currentNodeSel.selectAll('text')
+    .attr('fill-opacity', n => pathSet.has(n.id) ? 1 : 0.08);
+
+  currentLinkSel.attr('stroke-opacity', e => {
+    const sid = typeof e.source === 'object' ? e.source.id : e.source;
+    const tid = typeof e.target === 'object' ? e.target.id : e.target;
+    if (pathEdges.has(sid + '->' + tid)) return 0.9;
+    return 0.02;
+  }).attr('stroke', e => {
+    const sid = typeof e.source === 'object' ? e.source.id : e.source;
+    const tid = typeof e.target === 'object' ? e.target.id : e.target;
+    if (pathEdges.has(sid + '->' + tid)) return accentColor;
+    return edgeColor(e);
+  }).attr('stroke-width', e => {
+    const sid = typeof e.source === 'object' ? e.source.id : e.source;
+    const tid = typeof e.target === 'object' ? e.target.id : e.target;
+    if (pathEdges.has(sid + '->' + tid)) return 3;
+    return edgeStrokeWidth(e.strength);
+  });
+
+  // Info panel
+  d3.select('#infoDot').style('background', accentColor);
+  d3.select('#infoTitle').text('Shortest Path');
+  let html = '<p>' + (path.length - 1) + ' hop' + (path.length - 1 !== 1 ? 's' : '') + ' from <strong>' + srcId.replace(/_/g,' ') + '</strong> to <strong>' + dstId.replace(/_/g,' ') + '</strong>.</p>';
+  html += '<h3>Path</h3><ul class="dep-list">';
+  path.forEach((id, i) => {
+    const n = classNodes.find(cn => cn.id === id);
+    const c = n ? getNodeColor(n) : css('--text-muted');
+    html += '<li><span class="dep-dot" style="background:'+c+'"></span>' + (n ? n.ns + '::' : '') + id;
+    if (i < path.length - 1) html += ' <span class="dep-type" style="margin-left:auto">&rarr;</span>';
+    html += '</li>';
+  });
+  html += '</ul>';
+  d3.select('#infoBody').html(html);
+  infoPanel.classed('visible', true);
+}
+
+function clearAnalysis() {
+  analysisMode = null;
+  pathSource = null;
+  pathTarget = null;
+  document.getElementById('btnPath').classList.remove('active');
+  document.getElementById('pathHint').classList.remove('visible');
+  // Reset highlights
+  if (currentNodeSel && currentLinkSel) {
+    resetClassHighlight(currentNodeSel, currentLinkSel);
+    // Restore original edge strokes
+    currentLinkSel.attr('stroke', d => edgeColor(d))
+      .attr('stroke-width', d => edgeStrokeWidth(d.strength));
+    currentNodeSel.select('rect').attr('stroke', d => getNodeColor(d));
+  }
+}
+
+
+// =============================================================================
+// TOOLBAR BUTTONS
+// =============================================================================
+
+// Path finder toggle
+document.getElementById('btnPath').addEventListener('click', () => {
+  if (analysisMode === 'path') {
+    clearAnalysis();
+    hideInfoPanel();
+    return;
+  }
+  clearAnalysis();
+  analysisMode = 'path';
+  pathSource = null;
+  pathTarget = null;
+  document.getElementById('btnPath').classList.add('active');
+  document.getElementById('pathHint').textContent = 'Click a source node, then a target node';
+  document.getElementById('pathHint').classList.add('visible');
+});
+
+
+// =============================================================================
+// TABS + SEARCH + KEYS
+// =============================================================================
+
+document.getElementById('searchInput').addEventListener('input', (e) => {
+  const q = e.target.value.toLowerCase().trim();
+  e.target.closest('.search-box').classList.toggle('has-value', q.length > 0);
+  if (!q) {
+    nodeGroup.selectAll('g').style('opacity', 1);
+    edgeGroup.selectAll('path').style('opacity', 1);
+    return;
+  }
+  nodeGroup.selectAll('g').style('opacity', function(d) {
+    const match = d.id.toLowerCase().includes(q) || (d.ns || '').toLowerCase().includes(q) || (d.desc || '').toLowerCase().includes(q);
+    return match ? 1 : 0.08;
+  });
+  edgeGroup.selectAll('path').style('opacity', 0.05);
+});
+
+document.getElementById('searchClear').addEventListener('click', () => {
+  const input = document.getElementById('searchInput');
+  input.value = '';
+  input.closest('.search-box').classList.remove('has-value');
+  input.focus();
+  nodeGroup.selectAll('g').style('opacity', 1);
+  edgeGroup.selectAll('path').style('opacity', 1);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    clearAnalysis();
+    selectedNode = null;
+    hideInfoPanel();
+    nodeGroup.selectAll('g').style('opacity', 1);
+    edgeGroup.selectAll('path').style('opacity', 1);
+    document.getElementById('searchInput').value = '';
+    document.querySelector('.search-box').classList.remove('has-value');
+    if (currentNodeSel && currentLinkSel) {
+      resetClassHighlight(currentNodeSel, currentLinkSel);
+      // Restore original edge strokes
+      currentLinkSel.attr('stroke', d => edgeColor(d))
+        .attr('stroke-width', d => edgeStrokeWidth(d.strength));
+      currentNodeSel.select('rect').attr('stroke', d => getNodeColor(d));
+    }
+  }
+});
+
+document.getElementById('infoClose').addEventListener('click', () => {
+  clearAnalysis();
+  selectedNode = null;
+  hideInfoPanel();
+  if (currentNodeSel && currentLinkSel) {
+    resetClassHighlight(currentNodeSel, currentLinkSel);
+    currentLinkSel.attr('stroke', d => edgeColor(d))
+      .attr('stroke-width', d => edgeStrokeWidth(d.strength));
+    currentNodeSel.select('rect').attr('stroke', d => getNodeColor(d));
+  }
+});
+
+// Clickable dependency items in info panel
+document.getElementById('infoBody').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-node-id]');
+  if (!li) return;
+  e.stopPropagation();
+  const nodeId = li.getAttribute('data-node-id');
+  if (nodeId) selectNode(nodeId);
+});
+
+// Hover on dependency items to show detail in right panel
+document.getElementById('infoBody').addEventListener('mouseover', (e) => {
+  const li = e.target.closest('li[data-dep-key]');
+  if (!li) return;
+  const depKey = li.getAttribute('data-dep-key');
+  const depStrength = li.getAttribute('data-dep-strength');
+  const depDir = li.getAttribute('data-dep-dir');
+  if (!depKey) return;
+
+  // Blink the dependency node on the graph
+  const depNodeId = li.getAttribute('data-node-id');
+  if (depNodeId && currentNodeSel) {
+    currentNodeSel.classed('node-blink', false);
+    currentNodeSel.filter(d => d.id === depNodeId).classed('node-blink', true);
+  }
+
+  const parts = depKey.split('->');
+  if (parts.length < 3) return;
+  const srcId = parts[0];
+  const tgtId = parts[1];
+  const depType = parts[2];
+
+  const nodeMap = Object.fromEntries(classNodes.map(n => [n.id, n]));
+  const srcNode = nodeMap[srcId];
+  const tgtNode = nodeMap[tgtId];
+  const depInfo = DEP_TYPES[depType];
+  const depColor = depInfo?.color || css('--text-muted');
+
+  // Build title
+  const srcLabel = srcNode ? srcNode.ns + '::' + srcId : srcId;
+  const tgtLabel = tgtNode ? tgtNode.ns + '::' + tgtId : tgtId;
+
+  document.getElementById('depDetailDot').style.background = depColor;
+  document.getElementById('depDetailTitle').textContent = srcLabel + ' \u2192 ' + tgtLabel;
+
+  let bodyHtml = '';
+  bodyHtml += '<span class="dep-detail-type" style="border:1px solid '+depColor+'">' + (depInfo?.label || depType) + '</span>';
+  bodyHtml += '<span class="dep-detail-strength">strength: ' + depStrength + '/8</span>';
+
+  // Look up description
+  const desc = DEP_DESCRIPTIONS[depKey];
+  if (desc) {
+    bodyHtml += '<h3>How it\'s used</h3>';
+    bodyHtml += '<p class="dep-desc-text">' + desc + '</p>';
+  } else {
+    bodyHtml += '<h3>Details</h3>';
+    bodyHtml += '<p class="dep-desc-text" style="color:var(--text-muted);font-style:italic">No source-level description available for this dependency.</p>';
+  }
+
+  document.getElementById('depDetailBody').innerHTML = bodyHtml;
+  depDetailPanel.classed('visible', true);
+});
+
+document.getElementById('infoBody').addEventListener('mouseout', (e) => {
+  // Check if we're leaving the infoBody entirely or moving to a non-dep item
+  const related = e.relatedTarget;
+  if (related && related.closest && related.closest('#infoBody li[data-dep-key]')) return;
+  depDetailPanel.classed('visible', false);
+  // Stop blinking
+  if (currentNodeSel) currentNodeSel.classed('node-blink', false);
+});
+
+// Handle resize
+window.addEventListener('resize', () => {
+  clearAnalysis();
+  selectedNode = null;
+  hideInfoPanel();
+  renderClassView();
+});
+
+// Theme toggle
+document.getElementById('themeToggle').addEventListener('click', () => {
+  const html = document.documentElement;
+  const isDark = html.dataset.theme === 'dark';
+  if (isDark) {
+    delete html.dataset.theme;
+    document.getElementById('themeToggle').innerHTML = '&#9790;'; // crescent moon
+  } else {
+    html.dataset.theme = 'dark';
+    document.getElementById('themeToggle').innerHTML = '&#9788;'; // sun
+  }
+  rebuildMarkers();
+  clearAnalysis();
+  selectedNode = null;
+  hideInfoPanel();
+  renderClassView();
+});
+
+// Initial render
+renderClassView();
+
+</script>
+</body>
+</html>
