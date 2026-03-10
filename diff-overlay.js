@@ -83,6 +83,7 @@
     overlayBgClickHandler = function () { showDiffOverviewPanel(); };
     overlayNodeHoverHandler = handleDiffNodeHover;
     overlayNodeHoverOutHandler = handleDiffNodeHoverOut;
+    overlayDeactivateHandler = deactivateDiff;
 
     applyDiffHighlight();
     showDiffOverviewPanel();
@@ -99,6 +100,7 @@
     overlayBgClickHandler = null;
     overlayNodeHoverHandler = null;
     overlayNodeHoverOutHandler = null;
+    overlayDeactivateHandler = null;
 
     // Reset graph to normal state
     selectedNode = null;

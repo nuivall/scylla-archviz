@@ -1198,6 +1198,7 @@ let overlayHoverOutHandler = null;     // () => void
 let overlayBgClickHandler = null;      // () => void — called when SVG background is clicked in overlay mode
 let overlayNodeHoverHandler = null;    // (nodeData, edges) => void — called on graph node hover in overlay mode
 let overlayNodeHoverOutHandler = null; // () => void — called on graph node mouseout in overlay mode
+let overlayDeactivateHandler = null;   // () => void — called to fully deactivate the overlay mode
 
 // Theme helpers — read CSS variables at runtime
 function css(varName) {
@@ -2091,6 +2092,18 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
   if (e.key === 'Escape') {
+    if (overlayClickHandler) {
+      // In overlay mode (e.g. diff):
+      // - If a node is selected (detail view), go back to the overview
+      // - If no node is selected (overview), deactivate the overlay entirely
+      if (selectedNode) {
+        selectedNode = null;
+        if (overlayBgClickHandler) overlayBgClickHandler();
+      } else {
+        if (overlayDeactivateHandler) overlayDeactivateHandler();
+      }
+      return;
+    }
     clearAnalysis();
     selectedNode = null;
     hideInfoPanel();
@@ -2128,6 +2141,18 @@ document.addEventListener('keyup', (e) => {
 });
 
 document.getElementById('infoClose').addEventListener('click', () => {
+  if (overlayClickHandler) {
+    // In overlay mode (e.g. diff):
+    // - If a node is selected (detail view), go back to the overview
+    // - If no node is selected (overview), deactivate the overlay entirely
+    if (selectedNode) {
+      selectedNode = null;
+      if (overlayBgClickHandler) overlayBgClickHandler();
+    } else {
+      if (overlayDeactivateHandler) overlayDeactivateHandler();
+    }
+    return;
+  }
   clearAnalysis();
   selectedNode = null;
   hideInfoPanel();
