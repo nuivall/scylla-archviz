@@ -226,12 +226,8 @@
   .dep-list li[data-node-id]:hover {
     background: var(--bg-tertiary);
   }
-  @keyframes node-blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.2; }
-  }
   .node-blink rect {
-    animation: node-blink 0.6s ease-in-out infinite;
+    filter: brightness(1.5) drop-shadow(0 0 6px currentColor);
   }
   .dep-list li .dep-dot {
     width: 8px; height: 8px;
