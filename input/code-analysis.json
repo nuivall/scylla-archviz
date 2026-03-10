@@ -1,0 +1,70 @@
+{
+  "commit": "c13580f38e",
+  "title": "DELETE ... ALLOW FILTERING (filtering delete)",
+  "summary": "Adds support for DELETE statements with ALLOW FILTERING, enabling deletion of rows matching arbitrary WHERE clauses without requiring the full primary key. The operation fans out to all nodes/shards in parallel (mapreduce-style), scans data, evaluates predicates, and writes tombstones. Three optimization tiers: T1 (partition-only predicates, partition tombstones), T2 (clustering key predicates, range tombstones), T3 (regular column predicates, per-row read-before-delete).",
+  "nodes": {
+    "query_processor": {
+      "summary": "New entry point added for filtering deletes. The query processor accepts the delete request and delegates execution to the mapreduce service for distributed processing. This is the CQL layer's gateway into the distributed filtering delete infrastructure.",
+      "files": ["cql3/query_processor.cc", "cql3/query_processor.hh"],
+      "linesAdded": 10,
+      "linesRemoved": 0
+    },
+    "mapreduce_service": {
+      "summary": "Major extension: ~470 lines of new code implementing the distributed filtering delete execution engine. Supports both vnode-based and tablet-based table topologies, splitting partition ranges across cluster nodes and dispatching work in parallel. Each shard scans local data, evaluates predicates, builds tombstone mutations at the appropriate optimization tier (partition, range, or row), and writes them through the storage proxy. Includes a new RPC verb handler and a retrying dispatcher for fault-tolerant remote execution with automatic fallback to local processing on failure.",
+      "files": ["service/mapreduce_service.cc", "service/mapreduce_service.hh"],
+      "linesAdded": 491,
+      "linesRemoved": 2
+    },
+    "messaging_service": {
+      "summary": "New RPC verb added for filtering delete requests. The verb shares the same connection pool as the existing mapreduce request verb. Includes serialization/deserialization support for the new request and result types.",
+      "files": ["message/messaging_service.cc", "message/messaging_service.hh"],
+      "linesAdded": 6,
+      "linesRemoved": 2
+    },
+    "feature_service": {
+      "summary": "New cluster feature flag added to gate the filtering delete feature. The flag ensures that DELETE ... ALLOW FILTERING is rejected during rolling upgrades until all nodes in the cluster support it.",
+      "files": ["gms/feature_service.hh"],
+      "linesAdded": 1,
+      "linesRemoved": 0
+    }
+  },
+  "edges": {
+    "query_processor->mapreduce_service": {
+      "summary": "Delegates filtering delete requests to the mapreduce service for distributed execution across the cluster."
+    },
+    "mapreduce_service->messaging_service": {
+      "summary": "Dispatches filtering delete work to remote nodes via a new RPC verb, with retry logic and automatic fallback to local execution."
+    },
+    "mapreduce_service->storage_proxy": {
+      "summary": "Writes tombstone mutations for rows matching the filtering delete predicates, and reads query size limits and tombstone thresholds."
+    },
+    "mapreduce_service->database": {
+      "summary": "Looks up the table's topology type (vnodes vs tablets) and accesses schema and partition range metadata for routing delete operations."
+    }
+  },
+  "newFiles": [
+    "cql3/statements/filtering_delete_statement.cc",
+    "cql3/statements/filtering_delete_statement.hh",
+    "idl/filtering_delete_request.idl.hh",
+    "test/boost/filtering_test.cc (additions)",
+    "test/cqlpy/test_delete_allow_filtering.py"
+  ],
+  "modifiedFiles": [
+    "configure.py",
+    "cql3/Cql.g",
+    "cql3/query_processor.cc",
+    "cql3/query_processor.hh",
+    "cql3/statements/delete_statement.cc",
+    "cql3/statements/modification_statement.cc",
+    "cql3/statements/modification_statement.hh",
+    "cql3/statements/raw/delete_statement.hh",
+    "cql3/statements/raw/modification_statement.hh",
+    "gms/feature_service.hh",
+    "message/messaging_service.cc",
+    "message/messaging_service.hh",
+    "query/query-request.hh",
+    "query/query.cc",
+    "service/mapreduce_service.cc",
+    "service/mapreduce_service.hh"
+  ]
+}
