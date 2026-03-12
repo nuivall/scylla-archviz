@@ -15,7 +15,6 @@ A single-file D3.js app that maps out **48 classes** and **167 dependencies** di
 - **Hover a dependency** — right panel shows how the dependency is actually used in the source code, and the target node blinks on the graph
 - **Path Finder** — click two nodes to find the shortest dependency path between them
 - **Search** — filter services by name
-- **Zero dependencies** — single `index.html` file, just open it in a browser
 
 ## Data accuracy
 
