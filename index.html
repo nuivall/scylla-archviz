@@ -463,16 +463,16 @@
   <img class="header-logo" src="data:image/svg+xml,%3Csvg viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%237dd4e0'/%3E%3Cstop offset='100%25' stop-color='%234ab8c9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M40 8C18 8 8 24 8 40c0 12 4 20 6 26l4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8c2-6 10-14 10-26C72 24 62 8 40 8z' fill='url(%23g)'/%3E%3Cellipse cx='34' cy='34' rx='12' ry='13' fill='white'/%3E%3Cellipse cx='37' cy='36' rx='6' ry='7' fill='%232d2d5e'/%3E%3Cpath d='M28 48Q34 54 44 48' stroke='%232d2d5e' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Crect x='52' y='28' width='8' height='36' rx='2' fill='%235b5b8e'/%3E%3Crect x='55' y='36' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3Crect x='60' y='30' width='8' height='34' rx='2' fill='%23e8a83e'/%3E%3Crect x='63' y='38' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3Crect x='68' y='28' width='8' height='36' rx='2' fill='%239e3b3b'/%3E%3Crect x='71' y='36' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3C/svg%3E" alt="logo">
   <h1>ScyllaDB Architecture</h1>
   <div class="search-box">
-    <input type="text" placeholder="Search services..." id="searchInput">
+    <input type="text" placeholder="Search..." id="searchInput">
     <button class="search-clear" id="searchClear">&times;</button>
   </div>
   <div class="stats" id="stats"></div>
   <div class="tool-sep"></div>
-  <button class="tool-btn" id="btnPath" title="Click two nodes to find shortest path">Path Finder</button>
-  <div class="tool-sep"></div>
   <button class="tool-btn" id="btnDetailed" title="Toggle detailed view with additional nodes and edges">Detailed</button>
   <div class="tool-sep"></div>
   <button class="tool-btn" id="btnDiff" title="Show diff overlay for the last commit">Diff</button>
+  <div class="tool-sep"></div>
+  <button class="tool-btn" id="btnPath" title="Click two nodes to find shortest path">Path</button>
   <div class="tool-sep"></div>
   <button class="theme-toggle" id="themeToggle" title="Toggle dark/light theme">&#9790;</button>
 </div>
@@ -1089,7 +1089,7 @@ function panToNode(d) {
   const svgH = window.innerHeight - 48;
   // Get current zoom scale, keep it (but clamp to a reasonable minimum)
   const curTransform = d3.zoomTransform(svg.node());
-  const scale = Math.max(curTransform.k, 0.6);
+  const scale = Math.max(curTransform.k, 1.2);
   // Offset x to account for info panel (~300px on left)
   const panelOffset = infoPanel.classed('visible') ? 150 : 0;
   const tx = (svgW / 2 + panelOffset) - d.x * scale;
@@ -1256,7 +1256,7 @@ function applyPathHighlight(srcId, dstId) {
 
   if (!path) {
     d3.select('#infoDot').style('background', css('--accent'));
-    d3.select('#infoTitle').text('Path Finder');
+    d3.select('#infoTitle').text('Path');
     d3.select('#infoBody').html('<p>No directed path found from <strong>' + srcId.replace(/_/g,' ') + '</strong> to <strong>' + dstId.replace(/_/g,' ') + '</strong>.</p>');
     infoPanel.classed('visible', true);
     return;
@@ -1362,8 +1362,11 @@ document.getElementById('btnPath').addEventListener('click', () => {
 // TABS + SEARCH + KEYS
 // =============================================================================
 
-document.getElementById('searchInput').addEventListener('input', (e) => {
-  const q = e.target.value.toLowerCase().trim();
+const searchInputEl = document.getElementById('searchInput');
+function searchNorm(s) { return s.toLowerCase().replace(/[_ ]/g, ''); }
+
+searchInputEl.addEventListener('input', (e) => {
+  const q = searchNorm(e.target.value.trim());
   e.target.closest('.search-box').classList.toggle('has-value', q.length > 0);
   if (!q) {
     nodeGroup.selectAll('g').style('opacity', 1);
@@ -1371,17 +1374,51 @@ document.getElementById('searchInput').addEventListener('input', (e) => {
     return;
   }
   nodeGroup.selectAll('g').style('opacity', function(d) {
-    const match = d.id.toLowerCase().includes(q) || (d.ns || '').toLowerCase().includes(q) || (d.desc || '').toLowerCase().includes(q);
+    const match = searchNorm(d.id).includes(q) || searchNorm(d.ns || '').includes(q);
     return match ? 1 : 0.08;
   });
   edgeGroup.selectAll('path').style('opacity', 0.05);
 });
 
+searchInputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    searchInputEl.value = '';
+    searchInputEl.closest('.search-box').classList.remove('has-value');
+    searchInputEl.blur();
+    nodeGroup.selectAll('g').style('opacity', 1);
+    edgeGroup.selectAll('path').style('opacity', 1);
+    return;
+  }
+  if (e.key === 'Enter') {
+    const q = searchNorm(searchInputEl.value.trim());
+    if (!q) return;
+    const matches = [];
+    nodeGroup.selectAll('g').each(function(d) {
+      const match = searchNorm(d.id).includes(q) || searchNorm(d.ns || '').includes(q);
+      if (match) matches.push(d);
+    });
+    if (matches.length === 1) {
+      searchInputEl.value = '';
+      searchInputEl.closest('.search-box').classList.remove('has-value');
+      searchInputEl.blur();
+      nodeGroup.selectAll('g').style('opacity', 1);
+      edgeGroup.selectAll('path').style('opacity', 1);
+      // Select and pan to the matched node
+      const d = matches[0];
+      if (overlayClickHandler) {
+        overlayClickHandler(d, currentEdges);
+        panToNode(d);
+      } else {
+        selectNode(d.id);
+      }
+    }
+  }
+});
+
 document.getElementById('searchClear').addEventListener('click', () => {
-  const input = document.getElementById('searchInput');
-  input.value = '';
-  input.closest('.search-box').classList.remove('has-value');
-  input.focus();
+  searchInputEl.value = '';
+  searchInputEl.closest('.search-box').classList.remove('has-value');
+  searchInputEl.focus();
   nodeGroup.selectAll('g').style('opacity', 1);
   edgeGroup.selectAll('path').style('opacity', 1);
 });
@@ -1426,6 +1463,14 @@ function _panLoop(t) {
 }
 
 document.addEventListener('keydown', (e) => {
+  // Alt focuses search box from anywhere
+  if (e.key === 'Alt') {
+    e.preventDefault();
+    searchInputEl.focus();
+    searchInputEl.select();
+    return;
+  }
+
   // Skip keyboard shortcuts when typing in an input
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
