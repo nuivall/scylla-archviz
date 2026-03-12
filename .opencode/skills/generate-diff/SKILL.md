@@ -175,7 +175,7 @@ For multi-commit diffs, the title should describe the overall theme and the summ
 }
 ```
 
-#### File 2: `diff-analysis-data.js`
+#### File 2: `data/diff-nodes.js`
 
 This file sets a global variable with the same data as the JSON, formatted for direct inclusion in the browser:
 
@@ -196,7 +196,7 @@ Already saved in step 2. No additional processing needed.
 
 After generating all files:
 1. Confirm `input/code-analysis.json` is valid JSON
-2. Confirm `diff-analysis-data.js` is valid JavaScript (the JSON is assigned to `var DIFF_ANALYSIS_DATA`)
+2. Confirm `data/diff-nodes.js` is valid JavaScript (the JSON is assigned to `var DIFF_ANALYSIS_DATA`)
 3. Confirm all node IDs in the analysis exist in the valid node ID list
 4. Confirm all edge keys in the analysis use the `source->target` format and both source and target are in the touched nodes set
 5. Report to the user: number of touched nodes, number of touched edges, total lines changed
@@ -209,4 +209,4 @@ After generating all files:
 - **Do NOT include test-only changes** as touched nodes. Test files don't map to any node.
 - **Edge format is `source->target`** without the dependency type. The dep type is only in classEdges, not in the analysis.
 - **New edges need no special field**: The overlay auto-detects new edges by comparing analysis edge keys against `classEdges`. Just include the edge in the `edges` object like any other — it will be rendered as a dashed blue path with a "new" badge automatically.
-- **The `diff-analysis-data.js` file goes in the project root**, not in `input/`.
+- **The `diff-nodes.js` file goes in the `data/` directory**, not in `input/` or the project root.

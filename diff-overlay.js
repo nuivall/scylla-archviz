@@ -34,10 +34,10 @@
   // ---- Activate / Deactivate ----
 
   function activateDiff() {
-    // Load analysis data from the global set by diff-analysis-data.js
+    // Load analysis data from the global set by data/diff-nodes.js
     if (!analysisData) {
       if (typeof DIFF_ANALYSIS_DATA === 'undefined') {
-        console.error('Diff overlay: DIFF_ANALYSIS_DATA not found. Ensure diff-analysis-data.js is loaded before diff-overlay.js.');
+        console.error('Diff overlay: DIFF_ANALYSIS_DATA not found. Ensure data/diff-nodes.js is loaded before diff-overlay.js.');
         btnDiff.textContent = 'Diff (error)';
         return;
       }
