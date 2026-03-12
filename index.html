@@ -31,23 +31,23 @@
     --guide-line-opacity: 0.08;
   }
   [data-theme="dark"] {
-    --bg: #0c1017;
-    --bg-secondary: #141a23;
-    --bg-tertiary: #1c232e;
-    --border: #2a3240;
-    --text: #dde3ec;
-    --text-muted: #7c8694;
-    --accent: #5ccfdf;
-    --glow: rgba(92,207,223,0.25);
-    --shadow: rgba(0,0,0,0.3);
-    --edge-color: #1e2530;
-    --edge-highlight: #5ccfdf;
-    --text-shadow-node: 0 0 8px rgba(0,0,0,0.8);
+    --bg: #272822;
+    --bg-secondary: #1e1f1a;
+    --bg-tertiary: #3e3d32;
+    --border: #75715e;
+    --text: #f8f8f2;
+    --text-muted: #75715e;
+    --accent: #66d9ef;
+    --glow: rgba(102,217,239,0.25);
+    --shadow: rgba(0,0,0,0.4);
+    --edge-color: #3e3d32;
+    --edge-highlight: #66d9ef;
+    --text-shadow-node: 0 0 8px rgba(39,40,34,0.9);
     --node-fill-opacity: 0.20;
     --node-stroke-opacity: 0.75;
-    --band-opacity: 0.025;
-    --tier-label-opacity: 0.3;
-    --guide-line-opacity: 0.06;
+    --band-opacity: 0.06;
+    --tier-label-opacity: 0.4;
+    --guide-line-opacity: 0.08;
   }
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
@@ -88,8 +88,8 @@
   }
   .search-box input {
     width: 100%;
-    padding: 6px 28px 6px 32px;
-    border-radius: 6px;
+    padding: 8px 30px 8px 34px;
+    border-radius: 8px;
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
@@ -112,12 +112,12 @@
     position: absolute;
     right: 6px; top: 50%;
     transform: translateY(-50%);
-    width: 18px; height: 18px;
+    width: 22px; height: 22px;
     border: none;
     background: none;
     color: var(--text-muted);
-    font-size: 15px;
-    line-height: 18px;
+    font-size: 17px;
+    line-height: 22px;
     text-align: center;
     cursor: pointer;
     border-radius: 50%;
@@ -136,16 +136,16 @@
   /* SVG area */
   svg {
     position: fixed;
-    top: 48px; left: 0;
-    width: 100%; height: calc(100vh - 48px);
+    top: 52px; left: 0;
+    width: 100%; height: calc(100vh - 52px);
   }
 
   /* Info Panel */
   .info-panel {
     position: fixed;
-    top: 58px; left: 10px;
+    top: 62px; left: 10px;
     width: 320px;
-    max-height: calc(100vh - 68px);
+    max-height: calc(100vh - 72px);
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -180,9 +180,10 @@
   .info-close {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: 19px;
+    font-size: 22px;
     border: none; background: none;
     line-height: 1;
+    padding: 4px;
     font-family: inherit;
   }
   .info-close:hover { color: var(--text); }
@@ -338,10 +339,10 @@
   .theme-toggle {
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 5px 10px;
+    border-radius: 8px;
+    padding: 8px 12px;
     cursor: pointer;
-    font-size: 15px;
+    font-size: 17px;
     line-height: 1;
     color: var(--text);
     transition: background 0.2s, border-color 0.2s;
@@ -355,10 +356,10 @@
   .tool-btn {
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 5px 10px;
+    border-radius: 8px;
+    padding: 8px 16px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     line-height: 1;
     color: var(--text-muted);
@@ -378,7 +379,7 @@
   }
   .tool-sep {
     width: 1px;
-    height: 20px;
+    height: 24px;
     background: var(--border);
     flex-shrink: 0;
   }
