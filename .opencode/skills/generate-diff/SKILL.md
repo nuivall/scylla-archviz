@@ -41,27 +41,16 @@ Read the saved diff file. Build a list of all modified/added/deleted files from 
 
 ### 4. Map files to graph nodes
 
-The archviz graph has a fixed set of node IDs. Map each touched file to zero or more graph nodes using the mapping rules below.
+The archviz graph has two sets of node IDs: **main view** nodes (in `data/arch-nodes.js`, variable `classNodes`) and **detailed view** nodes (in `data/arch-detailed-nodes.js`, variable `detailedClassNodes`). Together they form the complete set of valid node IDs.
 
-**Valid graph node IDs** (only these exist on the graph):
+**Discovering valid node IDs**: Do NOT hardcode node IDs. Instead, read the data files to extract them:
+- Read `data/arch-nodes.js` and collect all `id` values from the `classNodes` array.
+- Read `data/arch-detailed-nodes.js` and collect all `id` values from the `detailedClassNodes` array.
+- The union of these two sets is the complete list of valid node IDs.
 
-```
-database, compaction_manager, storage_manager, sstable_compressor_factory,
-system_keyspace, view_builder, view_building_worker, view_update_generator,
-snapshot_ctl, batchlog_manager, sstables_loader, raft_sys_table_storage,
-gossiper, messaging_service, shared_token_metadata, erm_factory,
-feature_service, snitch, stream_manager, repair_service, failure_detector,
-address_map, direct_fd_pinger, raft_server, raft_rpc,
-storage_service, storage_proxy, migration_manager, raft_group_registry,
-raft_group0, raft_group0_client, group0_state_machine, qos_controller,
-auth_service, auth_cache, cdc_generation, cdc_service, task_manager,
-cache_hitrate_calculator, paxos_store, view_update_backlog_broker, tracing,
-mapreduce_service, strong_coordinator, groups_manager, client_routes,
-query_processor, lang_manager, vector_store_client,
-cql_server, alternator_executor, alternator_server, alternator_expiration, audit
-```
+Map each touched file to zero or more graph nodes using the mapping rules below.
 
-**File-to-node mapping rules** (apply in order):
+**File-to-node mapping rules — main view nodes** (apply in order):
 
 | File path pattern | Node ID |
 |---|---|
@@ -87,7 +76,7 @@ cql_server, alternator_executor, alternator_server, alternator_expiration, audit
 | `locator/snitch*` or `locator/*snitch*` | `snitch` |
 | `locator/erm_factory.*` or `locator/effective_replication_map*` | `erm_factory` |
 | `message/messaging_service.*` | `messaging_service` |
-| `streaming/*` | `stream_manager` |
+| `streaming/*` (not `stream_session*` or `stream_plan*`) | `stream_manager` |
 | `repair/*` | `repair_service` |
 | `direct_failure_detector/*` | `failure_detector` |
 | `service/address_map.*` or `gms/gossip_address_map*` | `address_map` |
@@ -120,15 +109,67 @@ cql_server, alternator_executor, alternator_server, alternator_expiration, audit
 | `service/sc/*groups*` or `service/groups_manager*` | `groups_manager` |
 | `audit/*` | `audit` |
 
+**File-to-node mapping rules — detailed view nodes** (apply in order, AFTER main view rules):
+
+| File path pattern | Node ID |
+|---|---|
+| `replica/table.*` or `replica/column_family.*` | `table` |
+| `replica/memtable.*` | `memtable` |
+| `row_cache.*` or `cache_flat_mutation_reader*` | `row_cache` |
+| `cache_tracker.*` or `row_cache.*tracker*` | `cache_tracker` |
+| `db/commitlog/commitlog.*` or `commitlog.*` | `commitlog` |
+| `sstables/sstable.*` or `sstables/sstable_set*` | `sstable` |
+| `sstables/sstables_manager.*` | `sstables_manager` |
+| `sstables/sstable_directory.*` | `sstable_directory` |
+| `compaction/compaction_strategy_impl.*` or `compaction/*strategy.*` (not `*_manager*`) | `compaction_strategy_impl` |
+| `compaction/compaction_backlog_manager.*` or `compaction/backlog*` | `compaction_backlog_manager` |
+| `replica/dirty_memory_manager.*` or `dirty_memory_manager*` | `dirty_memory_manager` |
+| `db/large_data_handler.*` or `large_data_handler*` | `large_data_handler` |
+| `db/config.*` | `config` |
+| `index/secondary_index_manager.*` or `secondary_index/index_manager*` | `secondary_index_manager` |
+| `mutation_reader.*` or `flat_mutation_reader*` or `mutation/mutation_reader*` | `mutation_reader` |
+| `locator/token_metadata.*` (class-specific, not shared wrapper) | `token_metadata` |
+| `locator/topology.*` | `topology` |
+| `locator/tablet_metadata.*` or `locator/tablets.*` | `tablet_metadata` |
+| `locator/tablet_map.*` or `locator/tablet.*map*` | `tablet_map` |
+| `locator/effective_replication_map.*` (class-specific) | `effective_replication_map` |
+| `locator/abstract_replication_strategy.*` or `locator/*_strategy.*` (not `snitch*`) | `abstract_replication_strategy` |
+| `streaming/stream_session.*` | `stream_session` |
+| `streaming/stream_plan.*` | `stream_plan` |
+| `gms/endpoint_state.*` or `gms/application_state*` | `endpoint_state` |
+| `service/topology_state_machine.*` or `topology_state_machine*` | `topology_state_machine` |
+| `service/tablet_allocator.*` | `tablet_allocator` |
+| `service/load_broadcaster.*` | `load_broadcaster` |
+| `service/migration_notifier.*` or `migration_listener*` | `migration_notifier` |
+| `service/endpoint_lifecycle*` | `endpoint_lifecycle_notifier` |
+| `db/hints/manager.*` or `db/hints/host_filter*` | `hints_manager` |
+| `db/hints/resource_manager.*` | `hints_resource_manager` |
+| `db/system_distributed_keyspace.*` | `system_distributed_keyspace` |
+| `db/view/view_building_coordinator.*` or `db/view/*coordinator*` | `view_building_coordinator` |
+| `auth/password_authenticator.*` | `password_authenticator` |
+| `auth/standard_role_manager.*` | `standard_role_manager` |
+| `service/paxos_state.*` or `service/paxos/paxos_state*` | `paxos_state` |
+| `cql3/statements/select_statement.*` | `select_statement` |
+| `cql3/statements/modification_statement.*` or `cql3/statements/update_statement.*` or `cql3/statements/delete_statement.*` | `modification_statement` |
+| `cql3/statements/batch_statement.*` | `batch_statement` |
+| `cql3/statements/schema_altering_statement.*` or `cql3/statements/create_*` or `cql3/statements/alter_*` or `cql3/statements/drop_*` | `schema_altering_statement` |
+| `cql3/prepared_statements_cache.*` or `cql3/query_options_fwd*` | `prepared_statements_cache` |
+| `cql3/restrictions/*` | `statement_restrictions` |
+| `transport/controller.*` or `transport/cql_server_controller*` | `cql_server_controller` |
+| `alternator/controller.*` | `alternator_controller` |
+| `transport/event_notifier.*` or `transport/event.*` | `event_notifier` |
+| `alternator/rmw_operation.*` | `rmw_operation` |
+
 **Important rules:**
 - Files that don't match any pattern (test files, build configs, IDL files, grammar files, etc.) are **ignored** — do NOT invent nodes for them.
-- Only use node IDs from the valid list above. Never create new node IDs.
-- A single file can map to at most one node.
+- Only use node IDs that exist in `classNodes` or `detailedClassNodes`. Never create new node IDs.
+- A single file can map to at most one node. If a file matches both a main and a detailed rule, prefer the more specific (detailed) match.
 - Aggregate linesAdded/linesRemoved per node across all files that map to it.
+- When mapping to detailed view nodes, the diff overlay will work in both main and detailed modes — detailed node touches will only be visible when the user activates the detailed view.
 
 ### 5. Identify touched edges
 
-The archviz graph has edges in `classEdges` array with format `[source, target, depType, strength]`. An edge is "touched" if **both** its source and target are in the set of touched nodes.
+The archviz graph has edges in `classEdges` (main view, in `data/arch-nodes.js`) and `detailedClassEdges` (detailed view, in `data/arch-detailed-nodes.js`), both with format `[source, target, depType, strength]`. The combined set of all edges forms the complete graph. An edge is "touched" if **both** its source and target are in the set of touched nodes.
 
 For each touched edge (use `source->target` format, ignoring depType), read the relevant diff hunks and write a 1-2 sentence summary describing what the diff uses this dependency for. Focus on the purpose — what is being sent/read/written through this dependency in the context of the diff.
 
@@ -197,16 +238,17 @@ Already saved in step 2. No additional processing needed.
 After generating all files:
 1. Confirm `input/code-analysis.json` is valid JSON
 2. Confirm `data/diff-nodes.js` is valid JavaScript (the JSON is assigned to `var DIFF_ANALYSIS_DATA`)
-3. Confirm all node IDs in the analysis exist in the valid node ID list
+3. Confirm all node IDs in the analysis exist in `classNodes` (from `data/arch-nodes.js`) or `detailedClassNodes` (from `data/arch-detailed-nodes.js`)
 4. Confirm all edge keys in the analysis use the `source->target` format and both source and target are in the touched nodes set
-5. Report to the user: number of touched nodes, number of touched edges, total lines changed
+5. Report to the user: number of touched nodes (noting how many are main vs. detailed), number of touched edges, total lines changed
 
 ## Common pitfalls
 
-- **Do NOT invent graph nodes** that don't exist in the valid list. If a file doesn't map to any node, skip it.
+- **Do NOT invent graph nodes** that don't exist in `classNodes` or `detailedClassNodes`. If a file doesn't map to any node, skip it.
+- **Do NOT hardcode node IDs** — always read them from `data/arch-nodes.js` and `data/arch-detailed-nodes.js`.
 - **Do NOT include raw diff hunks** in the summaries. Write high-level descriptions.
 - **Do NOT quote code-level names** (functions, methods, variables, classes, types) in summaries. Describe behavior and architecture, not code symbols.
 - **Do NOT include test-only changes** as touched nodes. Test files don't map to any node.
 - **Edge format is `source->target`** without the dependency type. The dep type is only in classEdges, not in the analysis.
-- **New edges need no special field**: The overlay auto-detects new edges by comparing analysis edge keys against `classEdges`. Just include the edge in the `edges` object like any other — it will be rendered as a dashed blue path with a "new" badge automatically.
+- **New edges need no special field**: The overlay auto-detects new edges by comparing analysis edge keys against `classEdges` and `detailedClassEdges`. Just include the edge in the `edges` object like any other — it will be rendered as a dashed blue path with a "new" badge automatically.
 - **The `diff-nodes.js` file goes in the `data/` directory**, not in `input/` or the project root.

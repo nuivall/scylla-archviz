@@ -470,6 +470,8 @@
   <div class="tool-sep"></div>
   <button class="tool-btn" id="btnPath" title="Click two nodes to find shortest path">Path Finder</button>
   <div class="tool-sep"></div>
+  <button class="tool-btn" id="btnDetailed" title="Toggle detailed view with additional nodes and edges">Detailed</button>
+  <div class="tool-sep"></div>
   <button class="tool-btn" id="btnDiff" title="Show diff overlay for the last commit">Diff</button>
   <div class="tool-sep"></div>
   <button class="theme-toggle" id="themeToggle" title="Toggle dark/light theme">&#9790;</button>
@@ -517,6 +519,12 @@ let currentNodes = [];      // live references to rendered nodes
 let currentEdges = [];      // live references to rendered edges
 let currentNodeSel = null;  // d3 selection for nodes
 let currentLinkSel = null;  // d3 selection for links
+
+// Active data — indirection layer so Detailed mode can swap in extended data
+let activeNodes = classNodes;
+let activeEdges = classEdges;
+let detailedMode = false;
+let detailedDataLoaded = false;
 
 // Overlay callback system — external scripts can register post-render hooks
 const postRenderCallbacks = [];
@@ -628,12 +636,12 @@ function renderClassView() {
   if (simulation) simulation.stop();
   simulation = null;
 
-  const nodes = classNodes.map(d => ({...d, radius: 28}));
+  const nodes = activeNodes.map(d => ({...d, radius: 28}));
   const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
 
   // Deduplicate edges (keep highest strength for duplicates with same source->target)
   const edgeMap = {};
-  classEdges.forEach(([s,t,type,strength]) => {
+  activeEdges.forEach(([s,t,type,strength]) => {
     if (!nodeMap[s] || !nodeMap[t]) return;
     const key = s + '->' + t + '->' + type;
     if (!edgeMap[key] || edgeMap[key].strength < strength) {
@@ -851,7 +859,7 @@ function renderClassView() {
         }
         var sid = typeof hovEdge.source === 'object' ? hovEdge.source.id : hovEdge.source;
         var tid = typeof hovEdge.target === 'object' ? hovEdge.target.id : hovEdge.target;
-        var nodeMap = Object.fromEntries(classNodes.map(function(n) { return [n.id, n]; }));
+        var nodeMap = Object.fromEntries(activeNodes.map(function(n) { return [n.id, n]; }));
         var srcNode = nodeMap[sid];
         var tgtNode = nodeMap[tid];
         var depInfo = DEP_TYPES[hovEdge.type];
@@ -1162,7 +1170,7 @@ function showClassInfo(d, edges) {
     return tid === d.id;
   }).sort((a,b) => b.strength - a.strength);
 
-  const nodeMap = Object.fromEntries(classNodes.map(n => [n.id, n]));
+  const nodeMap = Object.fromEntries(activeNodes.map(n => [n.id, n]));
   const muted = css('--text-muted');
 
   let html = '<p>' + d.desc + '</p>';
@@ -1301,7 +1309,7 @@ function applyPathHighlight(srcId, dstId) {
   let html = '<p>' + (path.length - 1) + ' hop' + (path.length - 1 !== 1 ? 's' : '') + ' from <strong>' + srcId.replace(/_/g,' ') + '</strong> to <strong>' + dstId.replace(/_/g,' ') + '</strong>.</p>';
   html += '<h3>Path</h3><ul class="dep-list">';
   path.forEach((id, i) => {
-    const n = classNodes.find(cn => cn.id === id);
+    const n = activeNodes.find(cn => cn.id === id);
     const c = n ? getNodeColor(n) : css('--text-muted');
     html += '<li><span class="dep-dot" style="background:'+c+'"></span>' + (n ? n.ns + '::' : '') + id;
     if (i < path.length - 1) html += ' <span class="dep-type" style="margin-left:auto">&rarr;</span>';
@@ -1539,7 +1547,7 @@ document.getElementById('infoBody').addEventListener('mouseover', (e) => {
     const tgtId = parts[1];
     const depType = parts[2];
 
-    const nodeMap = Object.fromEntries(classNodes.map(n => [n.id, n]));
+    const nodeMap = Object.fromEntries(activeNodes.map(n => [n.id, n]));
     const srcNode = nodeMap[srcId];
     const tgtNode = nodeMap[tgtId];
     const depInfo = DEP_TYPES[depType];
@@ -1598,6 +1606,56 @@ window.addEventListener('resize', () => {
   selectedNode = null;
   hideInfoPanel();
   renderClassView();
+});
+
+// Detailed view toggle
+const btnDetailed = document.getElementById('btnDetailed');
+btnDetailed.addEventListener('click', () => {
+  function applyDetailedToggle() {
+    detailedMode = !detailedMode;
+    if (detailedMode) {
+      // Merge base + detailed data (dedup nodes by id)
+      const baseIds = new Set(classNodes.map(n => n.id));
+      const extraNodes = (typeof detailedClassNodes !== 'undefined' ? detailedClassNodes : [])
+        .filter(n => !baseIds.has(n.id));
+      activeNodes = classNodes.concat(extraNodes);
+      activeEdges = classEdges.concat(typeof detailedClassEdges !== 'undefined' ? detailedClassEdges : []);
+      // Merge detailed dependency descriptions into DEP_DESCRIPTIONS
+      if (typeof detailedDepDescriptions !== 'undefined') {
+        Object.assign(DEP_DESCRIPTIONS, detailedDepDescriptions);
+      }
+      btnDetailed.classList.add('active');
+    } else {
+      activeNodes = classNodes;
+      activeEdges = classEdges;
+      // Remove detailed dependency descriptions from DEP_DESCRIPTIONS
+      if (typeof detailedDepDescriptions !== 'undefined') {
+        Object.keys(detailedDepDescriptions).forEach(k => delete DEP_DESCRIPTIONS[k]);
+      }
+      btnDetailed.classList.remove('active');
+    }
+    clearAnalysis();
+    selectedNode = null;
+    hideInfoPanel();
+    renderClassView();
+  }
+
+  if (!detailedDataLoaded) {
+    // Dynamically load the detailed data script
+    const script = document.createElement('script');
+    script.src = 'data/arch-detailed-nodes.js';
+    script.onload = () => {
+      detailedDataLoaded = true;
+      applyDetailedToggle();
+    };
+    script.onerror = () => {
+      btnDetailed.textContent = 'Detailed (error)';
+      console.error('Failed to load data/arch-detailed-nodes.js');
+    };
+    document.head.appendChild(script);
+  } else {
+    applyDetailedToggle();
+  }
 });
 
 // Theme toggle

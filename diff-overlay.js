@@ -54,20 +54,6 @@
       }
     });
 
-    // Detect new edges: diff edges that don't exist in the current graph
-    newEdgeKeys = new Set();
-    if (currentEdges) {
-      const existingEdgeKeys = new Set();
-      currentEdges.forEach(e => {
-        const sid = typeof e.source === 'object' ? e.source.id : e.source;
-        const tid = typeof e.target === 'object' ? e.target.id : e.target;
-        existingEdgeKeys.add(sid + '->' + tid);
-      });
-      touchedEdgeKeys.forEach(key => {
-        if (!existingEdgeKeys.has(key)) newEdgeKeys.add(key);
-      });
-    }
-
     diffActive = true;
     btnDiff.classList.add('active');
 
@@ -148,6 +134,22 @@
 
   function applyDiffHighlight() {
     if (!currentNodeSel || !currentLinkSel) return;
+
+    // Re-detect new edges against the current graph edges on every call.
+    // This is important because toggling detailed mode changes currentEdges,
+    // so "new" vs "existing" classification must be re-evaluated.
+    newEdgeKeys = new Set();
+    if (currentEdges) {
+      const existingEdgeKeys = new Set();
+      currentEdges.forEach(e => {
+        const sid = typeof e.source === 'object' ? e.source.id : e.source;
+        const tid = typeof e.target === 'object' ? e.target.id : e.target;
+        existingEdgeKeys.add(sid + '->' + tid);
+      });
+      touchedEdgeKeys.forEach(key => {
+        if (!existingEdgeKeys.has(key)) newEdgeKeys.add(key);
+      });
+    }
 
     // Dim all nodes, brighten touched ones
     currentNodeSel.select('rect')
@@ -305,7 +307,7 @@
       html += '<ul class="dep-list">';
       nodeIds.forEach(nodeId => {
         const info = data.nodes[nodeId];
-        const cn = classNodes.find(n => n.id === nodeId);
+        const cn = activeNodes.find(n => n.id === nodeId);
         html += '<li data-node-id="' + nodeId + '" style="cursor:pointer">';
         html += '<span class="dep-dot" style="background:' + DIFF_GREEN + '"></span>';
         html += (cn ? cn.ns + '::' : '') + nodeId;
@@ -373,7 +375,7 @@
     }
 
     // Only show diff-affected dependencies (including new edges not in the graph)
-    const nodeMap = Object.fromEntries(classNodes.map(n => [n.id, n]));
+    const nodeMap = Object.fromEntries(activeNodes.map(n => [n.id, n]));
 
     // Collect outgoing diff edges (existing + new)
     const outItems = [];
@@ -463,7 +465,7 @@
     const parts = diffEdgeKey.split('->');
     const srcId = parts[0];
     const tgtId = parts[1];
-    const nodeMap = Object.fromEntries(classNodes.map(n => [n.id, n]));
+    const nodeMap = Object.fromEntries(activeNodes.map(n => [n.id, n]));
     const srcNode = nodeMap[srcId];
     const tgtNode = nodeMap[tgtId];
 
@@ -519,7 +521,7 @@
     var isNew = newEdgeKeys.has(edgeKey);
     var parts = edgeKey.split('->');
     var srcId = parts[0], tgtId = parts[1];
-    var nodeMap = Object.fromEntries(classNodes.map(function(n) { return [n.id, n]; }));
+    var nodeMap = Object.fromEntries(activeNodes.map(function(n) { return [n.id, n]; }));
     var srcNode = nodeMap[srcId];
     var tgtNode = nodeMap[tgtId];
     var srcLabel = srcNode ? srcNode.ns + '::' + srcId : srcId;
