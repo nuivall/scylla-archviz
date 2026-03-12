@@ -1,11 +1,11 @@
 ---
 name: refresh-deps
-description: Refresh architecture dependency data (nodes, edges, descriptions) for scylla-archviz by analyzing the ScyllaDB source tree. Asks whether to update main or detailed view and what to refresh.
+description: Refresh architecture dependency data (nodes, edges, descriptions) for scylla-archviz by analyzing the ScyllaDB source tree. Asks whether to update main or detailed view and what to add.
 ---
 
 ## What I do
 
-Analyze the ScyllaDB C++ source tree to discover sharded services and their dependencies, then update the architecture graph data files used by scylla-archviz. I can refresh nodes (service classes), edges (dependencies between them), and dependency descriptions.
+Analyze the ScyllaDB C++ source tree to discover sharded services and their dependencies, then update the architecture graph data files used by scylla-archviz. Always refreshes everything: nodes (service classes), edges (dependencies between them), and dependency descriptions.
 
 ## When to use me
 
@@ -26,15 +26,15 @@ Use the `question` tool to ask all questions at once:
 - **Main view** (`data/arch-nodes.js`) — the default graph with core sharded services
 - **Detailed view** (`data/arch-detailed-nodes.js`) — extended graph with additional nodes/edges loaded via the "Detailed" button
 
-**Question 2 — What to refresh:**
-- **Nodes only** — discover/update service class entries
-- **Edges only** — discover/update dependency edges between existing nodes
-- **Descriptions only** — update dependency description text for existing edges
-- **Nodes + edges** — discover both, but skip descriptions
-- **Everything** — full refresh of nodes, edges, and descriptions
+**Question 2 — What to add:**
+- **Auto-discover** — scan the source tree, present candidates, and ask me to confirm before adding
+- **Specific classes** — I'll tell you exactly which classes to add (user types a comma-separated list)
+- **Nothing new** — only update existing entries, don't add any new nodes
 
 **Question 3 — Repository path:**
 - Absolute path to the ScyllaDB git repo (e.g. `/code/nuivall/scylladb`)
+
+The refresh always updates **everything** — nodes, edges, and descriptions — for all entries (existing + newly added).
 
 ### 2. Read the current data file
 
@@ -45,16 +45,70 @@ Read the target data file to understand what already exists:
 
 Build a set of existing node IDs and existing edge keys (`source->target->type`) from the file.
 
-### 3. Discover sharded services (if refreshing nodes)
+### 3. Discover classes
 
-Search the ScyllaDB source for classes that inherit from `peering_sharded_service` or `async_sharded_service`. These are the architectural building blocks shown on the graph.
+If the user chose **"Nothing new"**, skip discovery entirely and proceed to step 4 with only existing nodes.
+
+If the user chose **"Specific classes"**, use the class names they provided — look up each one in the source tree to extract namespace, description, and layer. Skip the discovery scan below.
+
+If the user chose **"Auto-discover"**, run the discovery procedure below for the target view, then **present the list of new candidates to the user** using the `question` tool (multi-select) and only add the ones they confirm.
+
+#### Main view — sharded services only
+
+Search the ScyllaDB source for classes that inherit from `peering_sharded_service` or `async_sharded_service`. These are the architectural building blocks shown on the main graph.
 
 ```bash
 # Find all sharded service class declarations
-rg -l 'peering_sharded_service|async_sharded_service' --include='*.hh' <repo_path>
+rg -l 'peering_sharded_service|async_sharded_service' --glob '*.hh' <repo_path>
 ```
 
-For each discovered service class:
+Only include services that are significant architectural components — core sharded services that participate in the dependency graph. Skip test helpers, internal utilities, and trivial wrappers.
+
+**Present candidates**: After discovery, compare against existing `classNodes`. For any new classes not already in the file, present a multi-select question like:
+
+> "I found N new sharded services not in the main view. Which ones should I add?"
+> - `class_name` — brief description (from header)
+> - ...
+
+#### Detailed view — all architecturally relevant classes
+
+The detailed view is **not limited to sharded services**. It includes any class that is an important sub-component, data structure, or abstraction in the architecture — for example `table`, `memtable`, `row_cache`, `token_metadata`, `topology`, `sstable`, `mutation_reader`, statement classes, etc.
+
+To discover candidates, use a broader search strategy:
+
+1. **Start from existing detailed nodes** — read the current `detailedClassNodes` to understand what's already tracked.
+2. **Examine main-view node internals** — for each main-view node, read its header to find important owned/referenced member types (e.g., `database` owns `table` instances, `gossiper` owns `endpoint_state` maps).
+3. **Follow dependency chains** — when a detailed node references another non-sharded class that is architecturally significant, consider adding it too.
+4. **Search for key base classes and patterns**:
+   ```bash
+   # Sub-components of the storage layer
+   rg -l 'class table ' --glob '*.hh' <repo_path>/replica/
+   rg -l 'class memtable ' --glob '*.hh' <repo_path>/replica/
+   rg -l 'class row_cache ' --glob '*.hh' <repo_path>/
+   rg -l 'class sstable ' --glob '*.hh' <repo_path>/sstables/
+
+   # Cluster layer internals
+   rg -l 'class token_metadata ' --glob '*.hh' <repo_path>/locator/
+   rg -l 'class topology ' --glob '*.hh' <repo_path>/locator/
+   rg -l 'class tablet_' --glob '*.hh' <repo_path>/locator/
+
+   # Query layer internals
+   rg -l 'class select_statement ' --glob '*.hh' <repo_path>/cql3/
+   rg -l 'class modification_statement ' --glob '*.hh' <repo_path>/cql3/
+   ```
+5. **Use judgement** — include classes that help the reader understand the internal structure of the main-view nodes. Skip trivial helpers, private implementation details, and test-only classes.
+
+Do NOT duplicate nodes that already exist in `classNodes` (the main view data).
+
+**Present candidates**: After discovery, compare against existing `detailedClassNodes` and `classNodes`. For any new classes not in either file, present a multi-select question like:
+
+> "I found N new candidate classes for the detailed view. Which ones should I add?"
+> - `class_name` (namespace) — brief description
+> - ...
+
+#### Common steps for both views
+
+For each confirmed class:
 1. Read the header file to extract the class name, namespace, and a brief description of what it does
 2. Determine which layer it belongs to using the layer assignment rules below
 3. Format as `{ id:'<class_name>', ns:'<namespace>', layer:'<layer>', desc:'<description>' }`
@@ -69,13 +123,9 @@ For each discovered service class:
 | `query` | Classes in `cql3/`, `lang/`, `vector_search/` |
 | `api` | Classes in `transport/`, `alternator/`, `audit/`, `service/client_routes` |
 
-**For main view**: Only include services that are significant architectural components — core sharded services that participate in the dependency graph. Skip test helpers, internal utilities, and trivial wrappers.
+### 4. Discover dependencies
 
-**For detailed view**: Include additional services that are not in the main view — more granular components, helpers, and secondary services. Do NOT duplicate nodes that already exist in `classNodes` (the main view data).
-
-### 4. Discover dependencies (if refreshing edges)
-
-For each node (both existing and newly discovered), read the class header and implementation files to identify dependencies on other sharded services.
+For each node (both existing and newly added), read the class header and implementation files to identify dependencies on other nodes in the graph.
 
 **How to identify dependencies:**
 
@@ -108,7 +158,7 @@ For each node (both existing and newly discovered), read the class header and im
 - Edges from a detailed node to a main-view node
 - Edges from a main-view node to a detailed node (cross-links)
 
-### 5. Update dependency descriptions (if refreshing descriptions)
+### 5. Update dependency descriptions
 
 Dependency descriptions are maps from edge key (`source->target->dep_type`) to a prose description.
 
@@ -156,7 +206,7 @@ After writing the file:
 4. Confirm all edge strengths are integers 1-8
 5. Confirm no duplicate node IDs within the file
 6. For detailed view: confirm no node IDs that duplicate `classNodes` entries
-7. For descriptions: confirm every edge in the target edge array has a matching key in the corresponding descriptions object (`DEP_DESCRIPTIONS` for main view, `detailedDepDescriptions` for detailed view)
+7. Confirm every edge in the target edge array has a matching key in the corresponding descriptions object (`DEP_DESCRIPTIONS` for main view, `detailedDepDescriptions` for detailed view)
 8. Report to the user: number of nodes added/removed/unchanged, number of edges added/removed/unchanged
 
 ## Data format reference
