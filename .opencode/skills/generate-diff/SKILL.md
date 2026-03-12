@@ -43,125 +43,56 @@ Read the saved diff file. Build a list of all modified/added/deleted files from 
 
 The archviz graph has two sets of node IDs: **main view** nodes (in `data/arch-nodes.js`, variable `classNodes`) and **detailed view** nodes (in `data/arch-detailed-nodes.js`, variable `detailedClassNodes`). Together they form the complete set of valid node IDs.
 
-**Discovering valid node IDs**: Do NOT hardcode node IDs. Instead, read the data files to extract them:
-- Read `data/arch-nodes.js` and collect all `id` values from the `classNodes` array.
-- Read `data/arch-detailed-nodes.js` and collect all `id` values from the `detailedClassNodes` array.
-- The union of these two sets is the complete list of valid node IDs.
+**CRITICAL: Do NOT use hardcoded node IDs or static mapping tables.** Always derive the mapping dynamically from the graph data files at runtime.
 
-Map each touched file to zero or more graph nodes using the mapping rules below.
+#### Step 4a. Read graph data and build the node registry
 
-**File-to-node mapping rules — main view nodes** (apply in order):
+Read both data files and extract every node's `{ id, ns }`:
+- `data/arch-nodes.js` → `classNodes` array
+- `data/arch-detailed-nodes.js` → `detailedClassNodes` array
 
-| File path pattern | Node ID |
-|---|---|
-| `service/storage_service.*` | `storage_service` |
-| `service/storage_proxy.*` | `storage_proxy` |
-| `service/migration_manager.*` | `migration_manager` |
-| `service/raft_group_registry.*` | `raft_group_registry` |
-| `service/raft_group0.*` (not client) | `raft_group0` |
-| `service/raft_group0_client.*` | `raft_group0_client` |
-| `service/group0_state_machine.*` | `group0_state_machine` |
-| `service/mapreduce_service.*` | `mapreduce_service` |
-| `service/qos_controller.*` or `service/qos*` | `qos_controller` |
-| `service/paxos*` | `paxos_store` |
-| `service/view_update_backlog*` | `view_update_backlog_broker` |
-| `service/cache_hitrate*` | `cache_hitrate_calculator` |
-| `service/raft_rpc.*` | `raft_rpc` |
-| `service/raft_sys_table_storage.*` | `raft_sys_table_storage` |
-| `service/client_routes.*` | `client_routes` |
-| `raft/server.*` | `raft_server` |
-| `gms/gossiper.*` | `gossiper` |
-| `gms/feature_service.*` or `gms/feature.*` | `feature_service` |
-| `locator/token_metadata.*` or `locator/shared_token_metadata.*` | `shared_token_metadata` |
-| `locator/snitch*` or `locator/*snitch*` | `snitch` |
-| `locator/erm_factory.*` or `locator/effective_replication_map*` | `erm_factory` |
-| `message/messaging_service.*` | `messaging_service` |
-| `streaming/*` (not `stream_session*` or `stream_plan*`) | `stream_manager` |
-| `repair/*` | `repair_service` |
-| `direct_failure_detector/*` | `failure_detector` |
-| `service/address_map.*` or `gms/gossip_address_map*` | `address_map` |
-| `service/direct_fd_pinger.*` | `direct_fd_pinger` |
-| `replica/database.*` | `database` |
-| `compaction/*compaction_manager*` | `compaction_manager` |
-| `sstables/storage_manager.*` | `storage_manager` |
-| `sstables/compressor*` | `sstable_compressor_factory` |
-| `db/system_keyspace.*` | `system_keyspace` |
-| `db/view/view_builder.*` | `view_builder` |
-| `db/view/view_building_worker.*` | `view_building_worker` |
-| `db/view/view_update_generator.*` | `view_update_generator` |
-| `db/snapshot*` | `snapshot_ctl` |
-| `db/batchlog_manager.*` | `batchlog_manager` |
-| `sstables_loader.*` | `sstables_loader` |
-| `cql3/query_processor.*` | `query_processor` |
-| `lang/*` | `lang_manager` |
-| `vector_search/*` | `vector_store_client` |
-| `transport/server.*` or `transport/cql*` | `cql_server` |
-| `alternator/executor.*` | `alternator_executor` |
-| `alternator/server.*` | `alternator_server` |
-| `alternator/expiration.*` | `alternator_expiration` |
-| `auth/service.*` or `auth/authenticator*` or `auth/authorizer*` or `auth/role_manager*` | `auth_service` |
-| `auth/permissions_cache*` or `auth/roles_cache*` | `auth_cache` |
-| `cdc/generation*` | `cdc_generation` |
-| `cdc/cdc_service*` or `cdc/log*` | `cdc_service` |
-| `tasks/*` | `task_manager` |
-| `tracing/*` | `tracing` |
-| `service/sc/*coordinator*` or `service/strong_coordinator*` | `strong_coordinator` |
-| `service/sc/*groups*` or `service/groups_manager*` | `groups_manager` |
-| `audit/*` | `audit` |
+The union of all `id` values is the complete set of valid node IDs.
 
-**File-to-node mapping rules — detailed view nodes** (apply in order, AFTER main view rules):
+#### Step 4b. Derive file-path patterns from `ns` and `id`
 
-| File path pattern | Node ID |
-|---|---|
-| `replica/table.*` or `replica/column_family.*` | `table` |
-| `replica/memtable.*` | `memtable` |
-| `row_cache.*` or `cache_flat_mutation_reader*` | `row_cache` |
-| `cache_tracker.*` or `row_cache.*tracker*` | `cache_tracker` |
-| `db/commitlog/commitlog.*` or `commitlog.*` | `commitlog` |
-| `sstables/sstable.*` or `sstables/sstable_set*` | `sstable` |
-| `sstables/sstables_manager.*` | `sstables_manager` |
-| `sstables/sstable_directory.*` | `sstable_directory` |
-| `compaction/compaction_strategy_impl.*` or `compaction/*strategy.*` (not `*_manager*`) | `compaction_strategy_impl` |
-| `compaction/compaction_backlog_manager.*` or `compaction/backlog*` | `compaction_backlog_manager` |
-| `replica/dirty_memory_manager.*` or `dirty_memory_manager*` | `dirty_memory_manager` |
-| `db/large_data_handler.*` or `large_data_handler*` | `large_data_handler` |
-| `db/config.*` | `config` |
-| `index/secondary_index_manager.*` or `secondary_index/index_manager*` | `secondary_index_manager` |
-| `mutation_reader.*` or `flat_mutation_reader*` or `mutation/mutation_reader*` | `mutation_reader` |
-| `locator/token_metadata.*` (class-specific, not shared wrapper) | `token_metadata` |
-| `locator/topology.*` | `topology` |
-| `locator/tablet_metadata.*` or `locator/tablets.*` | `tablet_metadata` |
-| `locator/tablet_map.*` or `locator/tablet.*map*` | `tablet_map` |
-| `locator/effective_replication_map.*` (class-specific) | `effective_replication_map` |
-| `locator/abstract_replication_strategy.*` or `locator/*_strategy.*` (not `snitch*`) | `abstract_replication_strategy` |
-| `streaming/stream_session.*` | `stream_session` |
-| `streaming/stream_plan.*` | `stream_plan` |
-| `gms/endpoint_state.*` or `gms/application_state*` | `endpoint_state` |
-| `service/topology_state_machine.*` or `topology_state_machine*` | `topology_state_machine` |
-| `service/tablet_allocator.*` | `tablet_allocator` |
-| `service/load_broadcaster.*` | `load_broadcaster` |
-| `service/migration_notifier.*` or `migration_listener*` | `migration_notifier` |
-| `service/endpoint_lifecycle*` | `endpoint_lifecycle_notifier` |
-| `db/hints/manager.*` or `db/hints/host_filter*` | `hints_manager` |
-| `db/hints/resource_manager.*` | `hints_resource_manager` |
-| `db/system_distributed_keyspace.*` | `system_distributed_keyspace` |
-| `db/view/view_building_coordinator.*` or `db/view/*coordinator*` | `view_building_coordinator` |
-| `auth/password_authenticator.*` | `password_authenticator` |
-| `auth/standard_role_manager.*` | `standard_role_manager` |
-| `service/paxos_state.*` or `service/paxos/paxos_state*` | `paxos_state` |
-| `cql3/statements/select_statement.*` | `select_statement` |
-| `cql3/statements/modification_statement.*` or `cql3/statements/update_statement.*` or `cql3/statements/delete_statement.*` | `modification_statement` |
-| `cql3/statements/batch_statement.*` | `batch_statement` |
-| `cql3/statements/schema_altering_statement.*` or `cql3/statements/create_*` or `cql3/statements/alter_*` or `cql3/statements/drop_*` | `schema_altering_statement` |
-| `cql3/prepared_statements_cache.*` or `cql3/query_options_fwd*` | `prepared_statements_cache` |
-| `cql3/restrictions/*` | `statement_restrictions` |
-| `transport/controller.*` or `transport/cql_server_controller*` | `cql_server_controller` |
-| `alternator/controller.*` | `alternator_controller` |
-| `transport/event_notifier.*` or `transport/event.*` | `event_notifier` |
-| `alternator/rmw_operation.*` | `rmw_operation` |
+For each node, convert its `ns` (C++ namespace) and `id` into candidate file patterns using these rules:
+
+1. **Namespace to directory**: Replace `::` with `/` in the `ns` field to get the directory prefix. E.g., `ns:'db::view'` → `db/view/`, `ns:'alternator'` → `alternator/`, `ns:'service'` → `service/`.
+
+2. **Stem from `id`**: Strip common prefixes/suffixes to get the file stem. Usually the `id` itself is the stem (e.g., `id:'executor'` → `executor`). For nodes whose `id` has a prefix matching the last namespace component, use the full `id` (e.g., `id:'view_builder'` with `ns:'db::view'` → stem is `view_builder`).
+
+3. **Primary pattern**: `<dir>/<id>.*` — e.g., `alternator/executor.*`, `db/view/view_builder.*`, `service/storage_service.*`.
+
+4. **Catch-all directory nodes**: Some nodes represent an entire subsystem directory. If a node's `ns` maps to a top-level directory where no other node's primary pattern would match files, that directory is a catch-all. Common examples: `streaming/*` → `stream_manager`, `repair/*` → `repair_service`, `tasks/*` → `task_manager`, `tracing/*` → `tracing`, `audit/*` → `audit`, `lang/*` → `lang_manager`, `vector_search/*` → `vector_store_client`. Determine these by checking if only one node has that namespace directory.
+
+5. **Namespace aliases**: Some C++ namespaces don't match directory names. Known aliases:
+   - `ns:'netw'` → directory `message/` (for `messaging_service`)
+   - `ns:'direct_fd'` → directory `direct_failure_detector/` (for `failure_detector`)
+   - `ns:''` (empty) → root directory (for `sstables_loader` etc.)
+
+   When deriving patterns, if the directory from step 1 doesn't seem right, check the node's `id` to locate the file. For example, `sstables_loader` with `ns:''` → look for `sstables_loader.*` in the repo root.
+
+Apply these rules to build a map of `file_pattern → node_id` for all nodes.
+
+#### Step 4c. Match diff files against patterns
+
+For each file in the diff:
+1. Skip test files (`test/*`), documentation (`docs/*`, `*.md`), build configs (`CMakeLists.txt`, `*.cmake`, `configure.py`), IDL files (`*.idl`), grammar files (`*.g`, `*.yy`), and `main.cc`.
+2. Try to match the file path against the derived patterns (most-specific first — patterns with explicit filenames before directory catch-alls).
+3. A single file maps to at most one node.
+
+#### Step 4d. Fallback: scan unmapped source files for class method definitions
+
+Some `.cc` files contain method implementations for a class defined in a different header file (e.g., `alternator/streams.cc` contains methods of the `executor` class). These won't match the primary `<dir>/<id>.*` pattern.
+
+For any `.cc` file from the diff that was NOT matched in step 4c and is NOT a test/doc/config file:
+1. Read the diff hunks for that file (or the first ~200 lines of the file itself in the target repo).
+2. Look for C++ qualified method definitions like `ClassName::method_name(` where `ClassName` matches a known node class. Build the class-name lookup from node IDs: convert `snake_case` id to the likely C++ class name (usually the same, e.g., `executor`, `system_keyspace`, `storage_service`). Also check the `ns` prefix to disambiguate (e.g., `alternator::executor`).
+3. If a file contains method definitions for exactly one known node class, map it to that node.
+4. If a file contains methods for multiple node classes, map it to the most-referenced one (by count of method definitions).
 
 **Important rules:**
-- Files that don't match any pattern (test files, build configs, IDL files, grammar files, etc.) are **ignored** — do NOT invent nodes for them.
+- Files that don't match any pattern AND don't contain recognizable class methods are **ignored** — do NOT invent nodes for them.
 - Only use node IDs that exist in `classNodes` or `detailedClassNodes`. Never create new node IDs.
 - A single file can map to at most one node. If a file matches both a main and a detailed rule, prefer the more specific (detailed) match.
 - Aggregate linesAdded/linesRemoved per node across all files that map to it.
@@ -245,7 +176,8 @@ After generating all files:
 ## Common pitfalls
 
 - **Do NOT invent graph nodes** that don't exist in `classNodes` or `detailedClassNodes`. If a file doesn't map to any node, skip it.
-- **Do NOT hardcode node IDs** — always read them from `data/arch-nodes.js` and `data/arch-detailed-nodes.js`.
+- **Do NOT hardcode node IDs or static mapping tables** — always derive file-to-node mappings dynamically from the `ns` and `id` fields in `data/arch-nodes.js` and `data/arch-detailed-nodes.js`. Use the fallback scan for `.cc` files that contain methods of a class defined elsewhere.
+- **Split source files**: Some `.cc` files implement methods of a class whose header lives in a different file (e.g., `alternator/streams.cc` contains `executor::` methods). The fallback scan in step 4d handles this — do NOT skip these files just because their name doesn't match a node ID.
 - **Do NOT include raw diff hunks** in the summaries. Write high-level descriptions.
 - **Do NOT quote code-level names** (functions, methods, variables, classes, types) in summaries. Describe behavior and architecture, not code symbols.
 - **Do NOT include test-only changes** as touched nodes. Test files don't map to any node.
