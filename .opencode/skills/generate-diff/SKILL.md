@@ -100,13 +100,19 @@ For any `.cc` file from the diff that was NOT matched in step 4c and is NOT a te
 
 ### 5. Identify touched edges
 
-The archviz graph has edges in `classEdges` (main view, in `data/arch-nodes.js`) and `detailedClassEdges` (detailed view, in `data/arch-detailed-nodes.js`), both with format `[source, target, depType, strength]`. The combined set of all edges forms the complete graph. An edge is "touched" if **both** its source and target are in the set of touched nodes.
+**You MUST read both edge arrays** to build the complete edge set:
+
+1. Read `data/arch-nodes.js` and extract the `classEdges` array.
+2. Read `data/arch-detailed-nodes.js` and extract the `detailedClassEdges` array.
+3. Concatenate both arrays into a single edge list. Both use the same format: `[source, target, depType, strength]`.
+
+An edge is "touched" if **both** its source and target are in the set of touched nodes (from step 4). Filter the combined edge list against the touched nodes set.
 
 For each touched edge (use `source->target` format, ignoring depType), read the relevant diff hunks and write a 1-2 sentence summary describing what the diff uses this dependency for. Focus on the purpose — what is being sent/read/written through this dependency in the context of the diff.
 
 Only include edges where the diff actually shows changes to how source uses target. Don't include edges just because both endpoints are touched — there must be evidence in the diff.
 
-**New dependencies**: If the diff introduces a dependency between two touched nodes that does NOT already exist in `classEdges`, still include it in the analysis with the `source->target` key format. The overlay will automatically detect these as "new" edges (by comparing the analysis edge keys against the graph's `classEdges`) and render them as dashed blue paths with a "new" badge — no extra field is needed in the JSON. Write the edge summary the same way as for existing edges: describe what the dependency is used for.
+**New dependencies**: If the diff introduces a dependency between two touched nodes that does NOT already exist in `classEdges` or `detailedClassEdges`, still include it in the analysis with the `source->target` key format. The overlay will automatically detect these as "new" edges (by comparing the analysis edge keys against the graph's `classEdges` and `detailedClassEdges`) and render them as dashed blue paths with a "new" badge — no extra field is needed in the JSON. Write the edge summary the same way as for existing edges: describe what the dependency is used for.
 
 ### 6. Write per-node and per-edge summaries
 
@@ -171,7 +177,8 @@ After generating all files:
 2. Confirm `data/diff-nodes.js` is valid JavaScript (the JSON is assigned to `var DIFF_ANALYSIS_DATA`)
 3. Confirm all node IDs in the analysis exist in `classNodes` (from `data/arch-nodes.js`) or `detailedClassNodes` (from `data/arch-detailed-nodes.js`)
 4. Confirm all edge keys in the analysis use the `source->target` format and both source and target are in the touched nodes set
-5. Report to the user: number of touched nodes (noting how many are main vs. detailed), number of touched edges, total lines changed
+5. Confirm edges were checked against **both** `classEdges` (from `data/arch-nodes.js`) and `detailedClassEdges` (from `data/arch-detailed-nodes.js`)
+6. Report to the user: number of touched nodes (noting how many are main vs. detailed), number of touched edges (noting how many are from main vs. detailed edge arrays), total lines changed
 
 ## Common pitfalls
 
