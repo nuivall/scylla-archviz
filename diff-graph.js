@@ -24,6 +24,10 @@
   let _active = false;       // is the diff graph view currently shown?
   let _rendered = false;     // have we rendered at least once?
   let _selectedNode = null;  // id of selected node in diff graph
+  let _codeReviewMode = false; // is the code-review sub-view active?
+  let _codeReviewRendered = false; // has the code review been rendered at least once?
+  let _parsedDiff = null;    // cached parsed diff data
+  let _savedGraphState = null; // saved zoom/pan/selection when jumping to code review
 
   // ---- Own SVG setup ----
   const svg = d3.select('#diffGraph');
@@ -104,6 +108,8 @@
   let _currentLinkSel = null;
 
   function render() {
+    // Skip SVG render when in code-review mode (theme toggle calls render())
+    if (_codeReviewMode) { _rebuildMarkers(); return; }
     tierGroup.selectAll('*').remove();
     edgeGroup.selectAll('*').remove();
     nodeGroup.selectAll('*').remove();
@@ -325,7 +331,7 @@
           .attr('x', d.linesRemoved > 0 ? -14 : 0)
           .attr('y', badgeY)
           .attr('text-anchor', 'middle')
-          .attr('fill', '#22c55e')
+          .attr('fill', '#7ec89a')
           .attr('font-size', 9.5)
           .attr('font-weight', 700)
           .attr('pointer-events', 'none');
@@ -336,7 +342,7 @@
           .attr('x', d.linesAdded > 0 ? 14 : 0)
           .attr('y', badgeY)
           .attr('text-anchor', 'middle')
-          .attr('fill', '#ef4444')
+          .attr('fill', '#ff5555')
           .attr('font-size', 9.5)
           .attr('font-weight', 700)
           .attr('pointer-events', 'none');
@@ -355,6 +361,11 @@
       _selectedNode = d.id;
       _highlightNode(d);
       _showNodeInfo(d);
+    });
+
+    node.on('dblclick', (e, d) => {
+      e.stopPropagation();
+      _goToCodeForNode(d);
     });
 
     node.on('mouseover', (e, d) => {
@@ -674,6 +685,17 @@
     // Cross-level links
     html += _crossLevelLinks(d);
 
+    // Go to Code link (if node has files)
+    if (d.files && d.files.length > 0) {
+      html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">';
+      html += '<a class="diff-go-to-code" data-node-id="' + _escAttr(d.id) + '" href="#" style="';
+      html += 'display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;';
+      html += 'color:var(--accent);text-decoration:none;cursor:pointer;';
+      html += 'transition:opacity .15s">';
+      html += '\u2192 Go to Code (' + d.files.length + ' file' + (d.files.length > 1 ? 's' : '') + ')';
+      html += '</a></div>';
+    }
+
     d3.select('#infoBody').html(html);
     infoPanel.classed('visible', true);
 
@@ -785,6 +807,17 @@
         depDetailPanel.classed('visible', false);
       });
     });
+
+    // "Go to Code" link
+    body.querySelectorAll('.diff-go-to-code').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const nodeId = a.getAttribute('data-node-id');
+        const nd = _currentNodes.find(n => n.id === nodeId);
+        if (nd) _goToCodeForNode(nd);
+      });
+    });
   }
 
   function _panToNode(d) {
@@ -801,12 +834,529 @@
   // ---- Mode buttons ----
   function _updateModeButtons() {
     document.querySelectorAll('#diffToolbar .view-tab[data-level]').forEach(btn => {
-      btn.classList.toggle('active', btn.getAttribute('data-level') === activeLevel);
+      const lvl = btn.getAttribute('data-level');
+      if (lvl === 'code-review') {
+        btn.classList.toggle('active', _codeReviewMode);
+      } else {
+        btn.classList.toggle('active', !_codeReviewMode && lvl === activeLevel);
+      }
     });
   }
 
+  // ==========================================================================
+  // CODE REVIEW MODE — Unified diff parser + renderer
+  // ==========================================================================
+
+  const _reviewContainer = document.getElementById('diffReviewContainer');
+  const _reviewScroll = document.getElementById('diffReviewScroll');
+  const _fileTreeEl = document.getElementById('diffFileTree');
+
+  // ---- Unified diff parser ----
+  function _parseDiff(text) {
+    if (!text) return [];
+    const lines = text.split('\n');
+    const files = [];
+    let current = null;
+    let hunk = null;
+    let oldLine = 0, newLine = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // New file header
+      if (line.startsWith('diff --git ')) {
+        current = { file: '', oldFile: '', hunks: [], isNew: false, isDeleted: false, isRenamed: false, isBinary: false };
+        files.push(current);
+        hunk = null;
+        continue;
+      }
+      if (!current) continue;
+
+      // old/new file names
+      if (line.startsWith('--- ')) {
+        const f = line.slice(4);
+        current.oldFile = f.startsWith('a/') ? f.slice(2) : f;
+        if (f === '/dev/null') current.isNew = true;
+        continue;
+      }
+      if (line.startsWith('+++ ')) {
+        const f = line.slice(4);
+        current.file = f.startsWith('b/') ? f.slice(2) : f;
+        if (f === '/dev/null') { current.isDeleted = true; current.file = current.oldFile; }
+        continue;
+      }
+      if (line.startsWith('rename from ')) { current.isRenamed = true; continue; }
+      if (line.startsWith('rename to ')) { current.isRenamed = true; continue; }
+      if (line.startsWith('Binary files ')) { current.isBinary = true; continue; }
+
+      // Hunk header
+      if (line.startsWith('@@ ')) {
+        const m = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/);
+        oldLine = m ? parseInt(m[1]) : 0;
+        newLine = m ? parseInt(m[2]) : 0;
+        const ctx = m && m[3] ? m[3].trim() : '';
+        hunk = { header: line, context: ctx, lines: [] };
+        if (current) current.hunks.push(hunk);
+        continue;
+      }
+
+      // Diff content lines
+      if (!hunk) continue;
+      if (line.startsWith('+')) {
+        hunk.lines.push({ type: 'add', content: line.slice(1), oldNum: null, newNum: newLine });
+        newLine++;
+      } else if (line.startsWith('-')) {
+        hunk.lines.push({ type: 'del', content: line.slice(1), oldNum: oldLine, newNum: null });
+        oldLine++;
+      } else if (line.startsWith('\\')) {
+        // "\ No newline at end of file" — skip
+        continue;
+      } else {
+        // Context line (starts with space or is empty)
+        hunk.lines.push({ type: 'ctx', content: line.startsWith(' ') ? line.slice(1) : line, oldNum: oldLine, newNum: newLine });
+        oldLine++;
+        newLine++;
+      }
+    }
+
+    // Compute per-file stats
+    files.forEach(f => {
+      f.linesAdded = 0;
+      f.linesRemoved = 0;
+      f.hunks.forEach(h => {
+        h.lines.forEach(l => {
+          if (l.type === 'add') f.linesAdded++;
+          if (l.type === 'del') f.linesRemoved++;
+        });
+      });
+    });
+
+    return files;
+  }
+
+  // ---- Look up AI summary for a file ----
+  function _fileSummary(filename) {
+    if (!DIFF_ANALYSIS_DATA || !DIFF_ANALYSIS_DATA.levels) return '';
+    // Search class-level nodes (most granular)
+    const classNodes = DIFF_ANALYSIS_DATA.levels.class ? DIFF_ANALYSIS_DATA.levels.class.nodes : {};
+    for (const id in classNodes) {
+      const n = classNodes[id];
+      const files = n.files || (n.file ? [n.file] : []);
+      if (files.some(f => f === filename)) return n.summary || '';
+    }
+    // Fallback to service-level
+    const svcNodes = DIFF_ANALYSIS_DATA.levels.peering_service ? DIFF_ANALYSIS_DATA.levels.peering_service.nodes : {};
+    for (const id in svcNodes) {
+      const n = svcNodes[id];
+      const files = n.files || [];
+      if (files.some(f => f === filename)) return n.summary || '';
+    }
+    return '';
+  }
+
+  // ---- File type badge ----
+  function _fileTypeBadge(f) {
+    if (f.isNew) return '<span class="diff-file-badge new-file">NEW</span>';
+    if (f.isDeleted) return '<span class="diff-file-badge deleted-file">DELETED</span>';
+    if (f.isRenamed) return '<span class="diff-file-badge renamed-file">RENAMED</span>';
+    // Cross-reference with DIFF_ANALYSIS_DATA
+    if (DIFF_ANALYSIS_DATA && DIFF_ANALYSIS_DATA.newFiles && DIFF_ANALYSIS_DATA.newFiles.includes(f.file)) {
+      return '<span class="diff-file-badge new-file">NEW</span>';
+    }
+    return '<span class="diff-file-badge modified-file">MODIFIED</span>';
+  }
+
+  // ---- Render code review ----
+  function _renderCodeReview() {
+    if (!_reviewScroll) return;
+
+    // Parse diff if not cached
+    if (!_parsedDiff) {
+      const rawText = typeof DIFF_RAW_TEXT !== 'undefined' ? DIFF_RAW_TEXT : null;
+      _parsedDiff = _parseDiff(rawText);
+    }
+
+    if (!_parsedDiff || _parsedDiff.length === 0) {
+      _reviewScroll.innerHTML =
+        '<div class="diff-review-inner"><div class="diff-review-empty">' +
+        '<h3>No diff data available</h3>' +
+        '<p>Run the generate-diff skill to populate this view</p>' +
+        '</div></div>';
+      if (_fileTreeEl) _fileTreeEl.innerHTML = '';
+      _codeReviewRendered = true;
+      return;
+    }
+
+    const files = _parsedDiff;
+    let totalAdded = 0, totalRemoved = 0;
+    files.forEach(f => { totalAdded += f.linesAdded; totalRemoved += f.linesRemoved; });
+
+    let html = '<div class="diff-review-inner">';
+
+    // Header
+    html += '<div class="diff-review-header">';
+    if (DIFF_ANALYSIS_DATA && DIFF_ANALYSIS_DATA.title) {
+      html += '<h2>' + _escHtml(DIFF_ANALYSIS_DATA.title) + '</h2>';
+    }
+    html += '<div class="diff-review-meta">';
+    if (DIFF_ANALYSIS_DATA && DIFF_ANALYSIS_DATA.commit) {
+      html += '<span style="font-family:\'Fira Code\',\'SF Mono\',\'Cascadia Code\',monospace">' + _escHtml(DIFF_ANALYSIS_DATA.commit) + '</span>';
+    }
+    html += '<span>' + files.length + ' files changed</span>';
+    html += '<span style="color:#7ec89a">+' + totalAdded + '</span>';
+    html += '<span style="color:#ff5555">-' + totalRemoved + '</span>';
+    html += '</div>';
+    if (DIFF_ANALYSIS_DATA && DIFF_ANALYSIS_DATA.summary) {
+      html += '<div class="diff-review-summary">' + _escHtml(DIFF_ANALYSIS_DATA.summary) + '</div>';
+    }
+    html += '</div>';
+
+    // File cards
+    files.forEach((f, fi) => {
+      const summary = _fileSummary(f.file);
+      html += '<div class="diff-file-card expanded" data-file="' + _escAttr(f.file) + '">';
+
+      // Header
+      html += '<div class="diff-file-header" data-file-idx="' + fi + '">';
+      html += '<span class="diff-file-chevron">\u25B6</span>';
+      html += '<span class="diff-file-name">' + _escHtml(f.file || f.oldFile || '(unknown)') + '</span>';
+      html += '<div class="diff-file-badges">';
+      if (f.linesAdded > 0) html += '<span class="diff-file-badge added-count">+' + f.linesAdded + '</span>';
+      if (f.linesRemoved > 0) html += '<span class="diff-file-badge removed-count">-' + f.linesRemoved + '</span>';
+      html += _fileTypeBadge(f);
+      html += '</div>';
+      html += '</div>';
+
+      // Summary line (from AI analysis)
+      html += '<div class="diff-file-summary' + (summary ? ' has-summary' : '') + '">';
+      if (summary) html += _escHtml(summary);
+      html += '</div>';
+
+      // Body
+      const ext = _fileExt(f.file);
+      html += '<div class="diff-file-body">';
+      if (f.isBinary) {
+        html += '<div style="padding:12px 14px;color:var(--text-muted);font-size:12px;font-style:italic">Binary file</div>';
+      } else {
+        f.hunks.forEach(h => {
+          html += '<div class="diff-hunk-header">' + _escHtml(h.header) + '</div>';
+          h.lines.forEach(l => {
+            const cls = l.type === 'add' ? 'diff-line-add' : l.type === 'del' ? 'diff-line-del' : 'diff-line-ctx';
+            const marker = l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' ';
+            const oldNum = l.oldNum !== null ? l.oldNum : '';
+            const newNum = l.newNum !== null ? l.newNum : '';
+            html += '<div class="diff-line ' + cls + '">';
+            html += '<div class="diff-line-gutter"><span>' + oldNum + '</span><span>' + newNum + '</span></div>';
+            html += '<div class="diff-line-content"><span class="diff-line-marker">' + marker + '</span> ' + _highlightLine(l.content, ext) + '</div>';
+            html += '</div>';
+          });
+        });
+      }
+      html += '</div>'; // .diff-file-body
+      html += '</div>'; // .diff-file-card
+    });
+
+    html += '</div>'; // .diff-review-inner
+    _reviewScroll.innerHTML = html;
+
+    // Wire collapse/expand
+    _reviewScroll.querySelectorAll('.diff-file-header').forEach(hdr => {
+      hdr.addEventListener('click', () => {
+        hdr.closest('.diff-file-card').classList.toggle('expanded');
+      });
+    });
+
+    // Build file tree
+    _renderFileTree(files);
+
+    // Track scroll position to highlight active file in tree
+    _wireScrollTracker();
+
+    _codeReviewRendered = true;
+  }
+
+  // ---- File tree ----
+  function _buildTree(files) {
+    // Build a nested directory tree from flat file paths
+    const root = { name: '', children: {}, files: [] };
+    files.forEach(f => {
+      const path = f.file || f.oldFile || '';
+      const parts = path.split('/');
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const dir = parts[i];
+        if (!node.children[dir]) {
+          node.children[dir] = { name: dir, children: {}, files: [] };
+        }
+        node = node.children[dir];
+      }
+      node.files.push({ name: parts[parts.length - 1], fullPath: path, data: f });
+    });
+    return root;
+  }
+
+  function _renderTreeNode(node, depth) {
+    let html = '';
+    const indent = 8 + depth * 14;
+
+    // Sort directories first, then files
+    const dirs = Object.keys(node.children).sort();
+    const fileList = node.files.sort((a, b) => a.name.localeCompare(b.name));
+
+    dirs.forEach(dirName => {
+      const child = node.children[dirName];
+      html += '<div class="diff-tree-dir" style="padding-left:' + indent + 'px">';
+      html += '<span class="diff-tree-chevron">\u25BC</span>';
+      html += '<span class="diff-tree-dir-icon">\u25A0</span>';
+      html += '<span>' + _escHtml(dirName) + '</span>';
+      html += '</div>';
+      html += '<div class="diff-tree-children">';
+      html += _renderTreeNode(child, depth + 1);
+      html += '</div>';
+    });
+
+    fileList.forEach(f => {
+      const iconMap = { 'cc': '\u2022', 'hh': '\u25E6', 'py': '\u2022', 'g': '\u2022' };
+      const ext = _fileExt(f.fullPath);
+      const icon = iconMap[ext] || '\u2022';
+      html += '<div class="diff-tree-file" data-file="' + _escAttr(f.fullPath) + '" style="padding-left:' + (indent + 4) + 'px">';
+      html += '<span class="diff-tree-icon">' + icon + '</span>';
+      html += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">' + _escHtml(f.name) + '</span>';
+      if (f.data.linesAdded > 0) html += '<span class="diff-tree-badge added">+' + f.data.linesAdded + '</span>';
+      if (f.data.linesRemoved > 0) html += '<span class="diff-tree-badge removed">-' + f.data.linesRemoved + '</span>';
+      html += '</div>';
+    });
+
+    return html;
+  }
+
+  // Collapse single-child directory chains for cleaner presentation
+  function _collapseTree(node) {
+    // Recursively collapse first
+    Object.keys(node.children).forEach(k => _collapseTree(node.children[k]));
+
+    // If this node has exactly one child dir and no files, merge them
+    const dirs = Object.keys(node.children);
+    if (dirs.length === 1 && node.files.length === 0) {
+      const childKey = dirs[0];
+      const child = node.children[childKey];
+      const newName = node.name ? node.name + '/' + child.name : child.name;
+      node.name = newName;
+      node.children = child.children;
+      node.files = child.files;
+    }
+  }
+
+  function _renderFileTree(files) {
+    if (!_fileTreeEl) return;
+
+    const tree = _buildTree(files);
+    // Collapse single-child chains at root level
+    Object.keys(tree.children).forEach(k => _collapseTree(tree.children[k]));
+
+    let html = '<div class="diff-file-tree-title">Files (' + files.length + ')</div>';
+    html += _renderTreeNode(tree, 0);
+    _fileTreeEl.innerHTML = html;
+
+    // Wire directory toggle
+    _fileTreeEl.querySelectorAll('.diff-tree-dir').forEach(dir => {
+      dir.addEventListener('click', () => {
+        dir.classList.toggle('collapsed');
+      });
+    });
+
+    // Wire file click — scroll to file card
+    _fileTreeEl.querySelectorAll('.diff-tree-file').forEach(item => {
+      item.addEventListener('click', () => {
+        const filePath = item.getAttribute('data-file');
+        if (!_reviewScroll) return;
+        const card = _reviewScroll.querySelector('.diff-file-card[data-file="' + CSS.escape(filePath) + '"]');
+        if (card) {
+          // Expand if collapsed
+          if (!card.classList.contains('expanded')) card.classList.add('expanded');
+          card.scrollIntoView({ behavior: 'instant', block: 'start' });
+        }
+        // Highlight in tree
+        _fileTreeEl.querySelectorAll('.diff-tree-file').forEach(f => f.classList.remove('active'));
+        item.classList.add('active');
+      });
+    });
+  }
+
+  // ---- Scroll tracking: highlight active file in tree ----
+  let _scrollRAF = null;
+  function _wireScrollTracker() {
+    if (!_reviewScroll || !_fileTreeEl) return;
+    _reviewScroll.addEventListener('scroll', () => {
+      if (_scrollRAF) return;
+      _scrollRAF = requestAnimationFrame(() => {
+        _scrollRAF = null;
+        _updateActiveTreeFile();
+      });
+    });
+  }
+
+  function _updateActiveTreeFile() {
+    if (!_reviewScroll || !_fileTreeEl) return;
+    const cards = _reviewScroll.querySelectorAll('.diff-file-card');
+    const scrollTop = _reviewScroll.scrollTop;
+    const viewMid = scrollTop + _reviewScroll.clientHeight * 0.3;
+    let closest = null;
+    let closestDist = Infinity;
+
+    cards.forEach(card => {
+      const dist = Math.abs(card.offsetTop - viewMid);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closest = card;
+      }
+    });
+
+    if (!closest) return;
+    const activeFile = closest.getAttribute('data-file');
+    const treeItems = _fileTreeEl.querySelectorAll('.diff-tree-file');
+    treeItems.forEach(item => {
+      const isActive = item.getAttribute('data-file') === activeFile;
+      item.classList.toggle('active', isActive);
+      // Scroll tree item into view if needed
+      if (isActive) {
+        const treeRect = _fileTreeEl.getBoundingClientRect();
+        const itemRect = item.getBoundingClientRect();
+        if (itemRect.top < treeRect.top || itemRect.bottom > treeRect.bottom) {
+          item.scrollIntoView({ block: 'nearest' });
+        }
+      }
+    });
+  }
+
+  // ---- Navigate to code review for a specific node's files ----
+  function _goToCodeForNode(d) {
+    if (!d || !d.files || d.files.length === 0) return;
+    // Save current graph state so we can restore on switch-back
+    _savedGraphState = {
+      level: activeLevel,
+      selectedNode: _selectedNode,
+      transform: d3.zoomTransform(svg.node())
+    };
+    // Switch to code review mode
+    _showCodeReview();
+    // Ensure code review is rendered before manipulating cards
+    if (!_reviewScroll) return;
+    const cards = _reviewScroll.querySelectorAll('.diff-file-card');
+    const nodeFiles = new Set(d.files.map(f => f.toLowerCase()));
+    // Clear any previous search styling
+    cards.forEach(c => c.classList.remove('search-hidden', 'search-match'));
+    if (_fileTreeEl) _fileTreeEl.querySelectorAll('.diff-tree-file').forEach(f => f.classList.remove('search-hidden'));
+    // Find the first matching card and scroll to it
+    let firstMatch = null;
+    cards.forEach(c => {
+      const fp = (c.getAttribute('data-file') || '').toLowerCase();
+      if (nodeFiles.has(fp)) {
+        c.classList.add('search-match');
+        if (!c.classList.contains('expanded')) c.classList.add('expanded');
+        if (!firstMatch) firstMatch = c;
+      }
+    });
+    if (firstMatch) {
+      firstMatch.scrollIntoView({ behavior: 'instant', block: 'start' });
+    }
+  }
+
+  // ---- Show/hide code review container ----
+  function _showCodeReview() {
+    _codeReviewMode = true;
+    svg.style('display', 'none');
+    if (_reviewContainer) _reviewContainer.classList.add('visible');
+    _hideInfoPanel();
+    if (!_codeReviewRendered) _renderCodeReview();
+    _updateModeButtons();
+  }
+
+  function _hideCodeReview() {
+    _codeReviewMode = false;
+    if (_reviewContainer) _reviewContainer.classList.remove('visible');
+    _updateModeButtons();
+  }
+
+  // ---- Code review search ----
+  function _searchCodeReview(q) {
+    if (!_reviewScroll) return;
+    const cards = _reviewScroll.querySelectorAll('.diff-file-card');
+    if (!q) {
+      cards.forEach(c => { c.classList.remove('search-hidden', 'search-match'); });
+      // Also clear tree highlight
+      if (_fileTreeEl) _fileTreeEl.querySelectorAll('.diff-tree-file').forEach(f => f.classList.remove('search-hidden'));
+      return;
+    }
+    cards.forEach(c => {
+      const fname = (c.getAttribute('data-file') || '').toLowerCase().replace(/[_ ]/g, '');
+      if (fname.includes(q)) {
+        c.classList.remove('search-hidden');
+        c.classList.add('search-match');
+      } else {
+        c.classList.add('search-hidden');
+        c.classList.remove('search-match');
+      }
+    });
+    // Also filter tree items
+    if (_fileTreeEl) {
+      _fileTreeEl.querySelectorAll('.diff-tree-file').forEach(f => {
+        const fname = (f.getAttribute('data-file') || '').toLowerCase().replace(/[_ ]/g, '');
+        f.classList.toggle('search-hidden', !fname.includes(q));
+      });
+    }
+  }
+
+  function _searchSelectCodeReview(q) {
+    if (!_reviewScroll) return false;
+    const cards = _reviewScroll.querySelectorAll('.diff-file-card');
+    const matches = [];
+    cards.forEach(c => {
+      const fname = (c.getAttribute('data-file') || '').toLowerCase().replace(/[_ ]/g, '');
+      if (fname.includes(q)) matches.push(c);
+    });
+    if (matches.length === 1) {
+      // Clear search styling, scroll to match, expand it
+      cards.forEach(c => c.classList.remove('search-hidden', 'search-match'));
+      matches[0].classList.add('expanded');
+      matches[0].scrollIntoView({ behavior: 'instant', block: 'start' });
+      return true;
+    }
+    return false;
+  }
+
   function switchLevel(level) {
+    if (level === 'code-review') {
+      _showCodeReview();
+      return;
+    }
     if (!LEVELS.includes(level)) return;
+    // Leaving code-review mode — restore graph
+    const wasCodeReview = _codeReviewMode;
+    if (_codeReviewMode) {
+      _hideCodeReview();
+      svg.style('display', null);
+    }
+    // If returning to the same level we left from, restore saved state
+    if (wasCodeReview && _savedGraphState && _savedGraphState.level === level) {
+      activeLevel = level;
+      _selectedNode = _savedGraphState.selectedNode;
+      _updateModeButtons();
+      render();
+      // Restore saved zoom/pan transform instead of auto-fit
+      svg.call(_zoom.transform, _savedGraphState.transform);
+      // Re-select the node if one was selected
+      if (_selectedNode) {
+        const nd = _currentNodes.find(n => n.id === _selectedNode);
+        if (nd) {
+          _highlightNode(nd);
+          _showNodeInfo(nd);
+        }
+      }
+      _savedGraphState = null;
+      return;
+    }
+    _savedGraphState = null;
     activeLevel = level;
     _selectedNode = null;
     _updateModeButtons();
@@ -822,6 +1372,193 @@
     return _escHtml(s);
   }
 
+  // ---- Syntax highlighting (regex-based, C++ / Python aware) ----
+  const _SYN_CPP_KW = new Set([
+    'auto','break','case','catch','class','const','constexpr','continue',
+    'default','delete','do','else','enum','explicit','export','extern',
+    'false','final','for','friend','goto','if','inline','mutable',
+    'namespace','new','noexcept','nullptr','operator','override','private',
+    'protected','public','register','return','sizeof','static','static_assert',
+    'static_cast','dynamic_cast','reinterpret_cast','const_cast',
+    'struct','switch','template','this','throw','true','try','typedef',
+    'typeid','typename','union','using','virtual','void','volatile','while',
+    'co_await','co_return','co_yield','concept','requires','consteval','constinit',
+    // Python keywords
+    'def','import','from','as','with','yield','lambda','pass','raise',
+    'assert','except','finally','global','nonlocal','in','is','not','and','or',
+    'elif','None','True','False','self','cls','async','await',
+  ]);
+  const _SYN_CPP_TYPES = new Set([
+    'int','long','short','char','float','double','bool','unsigned','signed',
+    'size_t','uint8_t','uint16_t','uint32_t','uint64_t','int8_t','int16_t',
+    'int32_t','int64_t','string','wstring','vector','map','set','list',
+    'pair','tuple','shared_ptr','unique_ptr','weak_ptr','optional','variant',
+    'future','promise','function','sstring','bytes','bytes_view',
+    'seastar','noncopyable_function','lw_shared_ptr','foreign_ptr',
+  ]);
+  // Regex: order matters — first match wins
+  const _SYN_RULES = [
+    // Line comments
+    { re: /\/\/.*$/,                  cls: 'syn-cmt' },
+    // Block comment fragments (single-line portion)
+    { re: /\/\*.*?\*\//,             cls: 'syn-cmt' },
+    { re: /\/\*.*/,                   cls: 'syn-cmt' },
+    { re: /.*?\*\//,                  cls: 'syn-cmt' },
+    // Python comments
+    { re: /#.*$/,                     cls: 'syn-cmt' },
+    // Preprocessor directives
+    { re: /^#\s*(?:include|define|undef|ifdef|ifndef|if|elif|else|endif|pragma|error|warning)\b.*/,
+                                      cls: 'syn-pp' },
+    // Strings (double and single quoted)
+    { re: /"(?:[^"\\]|\\.)*"/,       cls: 'syn-str' },
+    { re: /'(?:[^'\\]|\\.)*'/,       cls: 'syn-str' },
+    // Raw strings  R"(...)"
+    { re: /R"[^"]*\([^)]*\)[^"]*"/,  cls: 'syn-str' },
+    // Numbers (hex, float, int)
+    { re: /\b0[xX][0-9a-fA-F]+[uUlL]*\b/, cls: 'syn-num' },
+    { re: /\b\d+\.?\d*(?:[eE][+-]?\d+)?[fFlLuU]*\b/, cls: 'syn-num' },
+    // Decorators (Python)
+    { re: /@\w+/,                     cls: 'syn-ns' },
+    // Namespace qualifiers  foo::
+    { re: /\b[a-zA-Z_]\w*(?=::)/,    cls: 'syn-ns' },
+    // Function calls  foo(
+    { re: /\b[a-zA-Z_]\w*(?=\s*\()/,  cls: null },  // handled specially
+    // Identifiers (keywords / types checked in handler)
+    { re: /\b[a-zA-Z_]\w*\b/,         cls: null },  // handled specially
+  ];
+
+  function _highlightLine(raw, fileExt) {
+    // Escape the entire line first, then highlight within escaped text
+    const esc = _escHtml(raw);
+    const tokens = [];
+    let remaining = esc;
+    let pos = 0;
+
+    // We work on the escaped HTML string — regexes below are adapted
+    // Build a combined regex that tokenizes the escaped line
+    // Strategy: scan character by character using simpler heuristics on escaped text
+
+    // Simpler approach: tokenize the RAW text, build spans, escape each token
+    const out = [];
+    let i = 0;
+    const src = raw;
+    const len = src.length;
+
+    while (i < len) {
+      let matched = false;
+
+      // Line comment //
+      if (src[i] === '/' && src[i+1] === '/') {
+        out.push('<span class="syn-cmt">' + _escHtml(src.slice(i)) + '</span>');
+        i = len; matched = true;
+      }
+      // Block comment start /*
+      else if (src[i] === '/' && src[i+1] === '*') {
+        const end = src.indexOf('*/', i + 2);
+        if (end >= 0) {
+          out.push('<span class="syn-cmt">' + _escHtml(src.slice(i, end + 2)) + '</span>');
+          i = end + 2;
+        } else {
+          out.push('<span class="syn-cmt">' + _escHtml(src.slice(i)) + '</span>');
+          i = len;
+        }
+        matched = true;
+      }
+      // Python comment #  (only for .py files, not preprocessor)
+      else if (src[i] === '#' && (fileExt === 'py')) {
+        out.push('<span class="syn-cmt">' + _escHtml(src.slice(i)) + '</span>');
+        i = len; matched = true;
+      }
+      // Preprocessor #include, #define etc (C++)
+      else if (src[i] === '#' && fileExt !== 'py') {
+        const ppMatch = src.slice(i).match(/^#\s*(?:include|define|undef|ifdef|ifndef|if|elif|else|endif|pragma|error|warning)\b.*/);
+        if (ppMatch) {
+          out.push('<span class="syn-pp">' + _escHtml(ppMatch[0]) + '</span>');
+          i += ppMatch[0].length; matched = true;
+        }
+      }
+      // Double-quoted string
+      else if (src[i] === '"') {
+        let j = i + 1;
+        while (j < len && src[j] !== '"') { if (src[j] === '\\') j++; j++; }
+        if (j < len) j++; // include closing quote
+        out.push('<span class="syn-str">' + _escHtml(src.slice(i, j)) + '</span>');
+        i = j; matched = true;
+      }
+      // Single-quoted string/char
+      else if (src[i] === '\'') {
+        let j = i + 1;
+        while (j < len && src[j] !== '\'') { if (src[j] === '\\') j++; j++; }
+        if (j < len) j++;
+        out.push('<span class="syn-str">' + _escHtml(src.slice(i, j)) + '</span>');
+        i = j; matched = true;
+      }
+      // Raw string R"..."
+      else if (src[i] === 'R' && src[i+1] === '"') {
+        const rEnd = src.indexOf(')"', i + 2);
+        if (rEnd >= 0) {
+          out.push('<span class="syn-str">' + _escHtml(src.slice(i, rEnd + 2)) + '</span>');
+          i = rEnd + 2;
+        } else {
+          out.push('<span class="syn-str">' + _escHtml(src.slice(i)) + '</span>');
+          i = len;
+        }
+        matched = true;
+      }
+      // Decorator @foo (Python)
+      else if (src[i] === '@' && fileExt === 'py') {
+        const dm = src.slice(i).match(/^@\w+/);
+        if (dm) {
+          out.push('<span class="syn-ns">' + _escHtml(dm[0]) + '</span>');
+          i += dm[0].length; matched = true;
+        }
+      }
+      // Number (hex, float, int)
+      else if (/\d/.test(src[i]) || (src[i] === '.' && i + 1 < len && /\d/.test(src[i+1]))) {
+        const nm = src.slice(i).match(/^(?:0[xX][0-9a-fA-F]+[uUlL]*|\d+\.?\d*(?:[eE][+-]?\d+)?[fFlLuU]*)/);
+        if (nm) {
+          out.push('<span class="syn-num">' + _escHtml(nm[0]) + '</span>');
+          i += nm[0].length; matched = true;
+        }
+      }
+      // Identifier / keyword / type / function
+      else if (/[a-zA-Z_]/.test(src[i])) {
+        const wm = src.slice(i).match(/^[a-zA-Z_]\w*/);
+        if (wm) {
+          const word = wm[0];
+          const after = src[i + word.length];
+          const afterTwo = src.slice(i + word.length, i + word.length + 2);
+          if (_SYN_CPP_KW.has(word)) {
+            out.push('<span class="syn-kw">' + _escHtml(word) + '</span>');
+          } else if (_SYN_CPP_TYPES.has(word)) {
+            out.push('<span class="syn-type">' + _escHtml(word) + '</span>');
+          } else if (afterTwo === '::') {
+            out.push('<span class="syn-ns">' + _escHtml(word) + '</span>');
+          } else if (after === '(') {
+            out.push('<span class="syn-fn">' + _escHtml(word) + '</span>');
+          } else {
+            out.push(_escHtml(word));
+          }
+          i += word.length; matched = true;
+        }
+      }
+
+      if (!matched) {
+        // Emit single character (escaped)
+        out.push(_escHtml(src[i]));
+        i++;
+      }
+    }
+
+    return out.join('');
+  }
+
+  function _fileExt(filename) {
+    if (!filename) return '';
+    const dot = filename.lastIndexOf('.');
+    return dot >= 0 ? filename.slice(dot + 1).toLowerCase() : '';
+  }
+
   // ---- Keyboard handler (when diff graph is active) ----
   function _onKeyDown(e) {
     if (!_active) return;
@@ -829,6 +1566,7 @@
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
     if (e.key === 'Escape') {
+      if (_codeReviewMode) return; // no Escape behavior in code review
       if (_selectedNode) {
         _selectedNode = null;
         _resetHighlight();
@@ -839,9 +1577,10 @@
       return;
     }
 
-    // 1/2 to switch levels
+    // 1/2/3 to switch levels
     if (e.key === '1') switchLevel('peering_service');
     if (e.key === '2') switchLevel('class');
+    if (e.key === '3') switchLevel('code-review');
   }
   document.addEventListener('keydown', _onKeyDown);
 
@@ -849,6 +1588,7 @@
   function _searchNorm(s) { return s.toLowerCase().replace(/[_ ]/g, ''); }
 
   function search(q) {
+    if (_codeReviewMode) { _searchCodeReview(q); return; }
     if (!_currentNodeSel) return;
     if (!q) {
       _currentNodeSel.style('opacity', 1);
@@ -863,6 +1603,7 @@
 
   // Select and pan to the first match; returns true if at least one match found
   function searchSelect(q) {
+    if (_codeReviewMode) return _searchSelectCodeReview(q);
     if (!_currentNodes.length) return false;
     const matches = _currentNodes.filter(n => _searchNorm(n.id).includes(q));
     if (matches.length === 1) {
@@ -879,8 +1620,14 @@
   // ---- Public API ----
   function activate() {
     _active = true;
-    svg.style('display', null);
-    render();
+    if (_codeReviewMode) {
+      svg.style('display', 'none');
+      if (_reviewContainer) _reviewContainer.classList.add('visible');
+      if (!_codeReviewRendered) _renderCodeReview();
+    } else {
+      svg.style('display', null);
+      render();
+    }
   }
 
   function deactivate() {
@@ -888,6 +1635,7 @@
     _selectedNode = null;
     _hideInfoPanel();
     svg.style('display', 'none');
+    if (_reviewContainer) _reviewContainer.classList.remove('visible');
   }
 
   function isActive() {
@@ -911,7 +1659,7 @@
 
   // Handle resize when active
   window.addEventListener('resize', () => {
-    if (_active) render();
+    if (_active && !_codeReviewMode) render();
   });
 
 })();

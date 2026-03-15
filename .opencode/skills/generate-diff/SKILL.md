@@ -1,11 +1,16 @@
 ---
 name: generate-diff
-description: Generate diff analysis input files for scylla-archviz from a git repo's recent commits. Asks for repo path and commit count, then produces input/code.diff, input/code-analysis.json, and data/diff-nodes.js with 2-level analysis (peering_service, class).
+description: Generate diff analysis input files for scylla-archviz from a git repo's recent commits. Asks for repo path and commit count, then produces input/code.diff, input/code-analysis.json, data/diff-nodes.js, and data/diff-raw.js with 2-level analysis (peering_service, class).
 ---
 
 ## What I do
 
 Generate the input files that power the "Diff Analysis" tab in scylla-archviz. I take a git repository path and a number of recent commits, extract the combined diff, perform a 2-level code analysis (peering services and classes), and produce the required output files.
+
+The "Diff Analysis" tab has three sub-views:
+1. **Services** — graph of affected peering services
+2. **Classes** — graph of affected C++ classes
+3. **Code** — full code review showing the actual unified diff, grouped by file with per-file AI summaries
 
 The analysis is **fully independent** of the architecture graph data (`arch-nodes.js`, `arch-detailed-nodes.js`). It discovers entities and relationships directly from the diff code itself.
 
@@ -239,7 +244,24 @@ var DIFF_ANALYSIS_DATA = <contents of code-analysis.json>;
 
 Write the JSON content inline as the value of `DIFF_ANALYSIS_DATA`. Use readable formatting (2-space indent), not minified.
 
-#### File 3: `input/code.diff`
+#### File 3: `data/diff-raw.js`
+
+This file embeds the raw unified diff text as a global JavaScript variable, allowing the "Code" review tab to render actual diff lines without needing `fetch()` (which fails under `file://` protocol):
+
+```javascript
+// Auto-generated from input/code.diff
+// Loaded via <script> tag to avoid fetch() issues under file:// protocol.
+var DIFF_RAW_TEXT = `<contents of input/code.diff, escaped for JS template literal>`;
+```
+
+**Escaping rules for the template literal:**
+- Backslashes: `\` → `\\`
+- Backticks: `` ` `` → `` \` ``
+- Dollar-brace sequences: `${` → `\${`
+
+Read the raw text of `input/code.diff`, apply these three escaping rules, then wrap the result in `` var DIFF_RAW_TEXT = `...`; `` with the comment header.
+
+#### File 4: `input/code.diff`
 
 Already saved in step 2. No additional processing needed.
 
@@ -248,9 +270,10 @@ Already saved in step 2. No additional processing needed.
 After generating all files:
 1. Confirm `input/code-analysis.json` is valid JSON.
 2. Confirm `data/diff-nodes.js` is valid JavaScript (the JSON is assigned to `var DIFF_ANALYSIS_DATA`).
-3. Confirm every node at every level has a valid `layer` value from `[storage, cluster, services, query, api]`.
-4. Confirm all edge keys use the `source->target` format and both source and target exist as node IDs at that level.
-5. Confirm cross-level references are consistent:
+3. Confirm `data/diff-raw.js` is valid JavaScript (the diff text is assigned to `var DIFF_RAW_TEXT` inside a template literal with proper escaping).
+4. Confirm every node at every level has a valid `layer` value from `[storage, cluster, services, query, api]`.
+5. Confirm all edge keys use the `source->target` format and both source and target exist as node IDs at that level.
+6. Confirm cross-level references are consistent:
    - Every class ID listed in a service's `classes` array exists in `levels.class.nodes`.
    - Every class's `peering_service` value (if non-null) exists in `levels.peering_service.nodes`.
 6. Report to the user:
@@ -271,4 +294,5 @@ After generating all files:
 - **Every node needs a layer.** Do not leave `layer` empty or null. Use the heuristics in step 6 to assign one.
 - **Cross-level links must be bidirectional.** If a service lists a class in its `classes` array, that class must have `peering_service` pointing back to that service. 
 - **The `diff-nodes.js` file goes in the `data/` directory**, not in `input/` or the project root.
+- **The `diff-raw.js` file also goes in the `data/` directory.** It must be generated alongside `diff-nodes.js` every time. The "Code" review tab depends on it.
 - **Peering services also appear as class-level nodes.** A service class like `storage_service` should be a node at both the `peering_service` and `class` levels.

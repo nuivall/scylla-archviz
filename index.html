@@ -7,7 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PScwIDAgODAgODAnIHhtbG5zPSdodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2Zyc+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSdnJyB4MT0nMCcgeTE9JzAnIHgyPScxJyB5Mj0nMSc+PHN0b3Agb2Zmc2V0PScwJScgc3RvcC1jb2xvcj0nIzdkZDRlMCcvPjxzdG9wIG9mZnNldD0nMTAwJScgc3RvcC1jb2xvcj0nIzRhYjhjOScvPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjxwYXRoIGQ9J000MCA4QzE4IDggOCAyNCA4IDQwYzAgMTIgNCAyMCA2IDI2bDQgOCA0LTggNCA4IDQtOCA0IDggNC04IDQgOCA0LTggNCA4IDQtOCA0IDggNC04YzItNiAxMC0xNCAxMC0yNkM3MiAyNCA2MiA4IDQwIDh6JyBmaWxsPSd1cmwoI2cpJy8+PGVsbGlwc2UgY3g9JzM0JyBjeT0nMzQnIHJ4PScxMicgcnk9JzEzJyBmaWxsPSd3aGl0ZScvPjxlbGxpcHNlIGN4PSczNycgY3k9JzM2JyByeD0nNicgcnk9JzcnIGZpbGw9JyMyZDJkNWUnLz48cGF0aCBkPSdNMjggNDhRMzQgNTQgNDQgNDgnIHN0cm9rZT0nIzJkMmQ1ZScgc3Ryb2tlLXdpZHRoPScyLjUnIGZpbGw9J25vbmUnIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcvPjxyZWN0IHg9JzUyJyB5PScyOCcgd2lkdGg9JzgnIGhlaWdodD0nMzYnIHJ4PScyJyBmaWxsPScjNWI1YjhlJy8+PHJlY3QgeD0nNTUnIHk9JzM2JyB3aWR0aD0nMicgaGVpZ2h0PScxNCcgcng9JzEnIGZpbGw9J3doaXRlJyBvcGFjaXR5PScuNycvPjxyZWN0IHg9JzYwJyB5PSczMCcgd2lkdGg9JzgnIGhlaWdodD0nMzQnIHJ4PScyJyBmaWxsPScjZThhODNlJy8+PHJlY3QgeD0nNjMnIHk9JzM4JyB3aWR0aD0nMicgaGVpZ2h0PScxNCcgcng9JzEnIGZpbGw9J3doaXRlJyBvcGFjaXR5PScuNycvPjxyZWN0IHg9JzY4JyB5PScyOCcgd2lkdGg9JzgnIGhlaWdodD0nMzYnIHJ4PScyJyBmaWxsPScjOWUzYjNiJy8+PHJlY3QgeD0nNzEnIHk9JzM2JyB3aWR0aD0nMicgaGVpZ2h0PScxNCcgcng9JzEnIGZpbGw9J3doaXRlJyBvcGFjaXR5PScuNycvPjwvc3ZnPg==">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
   :root {
@@ -33,20 +33,21 @@
     --guide-line-opacity: 0.08;
   }
   [data-theme="dark"] {
-    --bg: #272822;
-    --bg-secondary: #1e1f1a;
-    --bg-tertiary: #3e3d32;
-    --border: #75715e;
+    /* Dracula theme */
+    --bg: #282a36;
+    --bg-secondary: #21222c;
+    --bg-tertiary: #44475a;
+    --border: #6272a4;
     --text: #f8f8f2;
-    --text-muted: #75715e;
-    --accent: #66d9ef;
-    --accent-btn: #7da7d1;
-    --glow: rgba(102,217,239,0.25);
-    --glow-btn: rgba(125,167,209,0.3);
-    --shadow: rgba(0,0,0,0.4);
-    --edge-color: #3e3d32;
-    --edge-highlight: #66d9ef;
-    --text-shadow-node: 0 0 8px rgba(39,40,34,0.9);
+    --text-muted: #6272a4;
+    --accent: #8be9fd;
+    --accent-btn: #bd93f9;
+    --glow: rgba(139,233,253,0.25);
+    --glow-btn: rgba(189,147,249,0.3);
+    --shadow: rgba(0,0,0,0.5);
+    --edge-color: #44475a;
+    --edge-highlight: #8be9fd;
+    --text-shadow-node: 0 0 8px rgba(40,42,54,0.9);
     --node-fill-opacity: 0.20;
     --node-stroke-opacity: 0.75;
     --band-opacity: 0.06;
@@ -228,6 +229,10 @@
   }
   .dep-list li[data-node-id]:hover {
     background: var(--bg-tertiary);
+  }
+  .diff-go-to-code:hover {
+    opacity: 0.75;
+    text-decoration: underline !important;
   }
   .node-blink rect {
     filter: brightness(1.5) drop-shadow(0 0 6px currentColor);
@@ -477,7 +482,7 @@
     font-size: 11px;
     color: var(--text-muted);
     padding: 2px 0;
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
   }
   .diff-commit-title {
     font-size: 14px;
@@ -485,12 +490,373 @@
     color: var(--text);
     margin-bottom: 6px;
   }
-  .diff-commit-hash {
+   .diff-commit-hash {
     font-size: 11px;
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
     color: var(--text-muted);
     margin-bottom: 8px;
   }
+
+  /* ---- Code Review mode ---- */
+  .diff-review-container {
+    position: fixed;
+    top: 52px; left: 0; right: 0; bottom: 0;
+    display: none;
+    z-index: 5;
+  }
+  .diff-review-container.visible { display: flex; }
+
+  /* File tree sidebar */
+  .diff-file-tree {
+    width: 300px;
+    min-width: 220px;
+    max-width: 400px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    padding: 12px 0;
+    font-size: 12px;
+    user-select: none;
+  }
+  .diff-file-tree-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    padding: 4px 14px 10px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+  }
+  .diff-tree-dir {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px 3px 0;
+    color: var(--text-muted);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .diff-tree-dir:hover { color: var(--text); }
+  .diff-tree-chevron {
+    display: inline-block;
+    width: 14px;
+    text-align: center;
+    font-size: 9px;
+    transition: transform 0.15s;
+    flex-shrink: 0;
+  }
+  .diff-tree-dir.collapsed .diff-tree-chevron { transform: rotate(-90deg); }
+  .diff-tree-dir-icon {
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.5;
+    flex-shrink: 0;
+  }
+  .diff-tree-dir.collapsed + .diff-tree-children { display: none; }
+  .diff-tree-children {
+    /* shown by default */
+  }
+  .diff-tree-file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px 3px 0;
+    cursor: pointer;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-left: 2px solid transparent;
+    transition: background 0.1s, border-color 0.1s;
+    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .diff-tree-file:hover { background: var(--bg-tertiary); }
+  .diff-tree-file.active {
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+    border-left-color: var(--accent);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  [data-theme="dark"] .diff-tree-file.active {
+    background: rgba(139,233,253,0.08);
+  }
+  .diff-tree-icon {
+    flex-shrink: 0;
+    font-size: 13px;
+    width: 16px;
+    text-align: center;
+    opacity: 0.6;
+  }
+  .diff-tree-badge {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 6px;
+    margin-left: auto;
+  }
+  .diff-tree-badge.added { color: #7ec89a; background: rgba(126,200,154,0.1); }
+  .diff-tree-badge.removed { color: #ff5555; background: rgba(255,85,85,0.1); }
+
+  /* Content panel (right side) */
+  .diff-review-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 0 60px;
+    background: var(--bg);
+  }
+  .diff-review-inner {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+  .diff-review-header {
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .diff-review-header h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .diff-review-header .diff-review-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 6px;
+  }
+  .diff-review-header .diff-review-summary {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.6;
+    margin-top: 8px;
+  }
+  .diff-review-stats-bar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .diff-review-stats-bar .stat-chip {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    font-weight: 500;
+  }
+  .diff-review-stats-bar .stat-chip.added { color: #7ec89a; border-color: rgba(126,200,154,0.3); background: rgba(126,200,154,0.08); }
+  .diff-review-stats-bar .stat-chip.removed { color: #ff5555; border-color: rgba(255,85,85,0.3); background: rgba(255,85,85,0.08); }
+
+  /* File card */
+  .diff-file-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: box-shadow 0.2s;
+  }
+  .diff-file-card:hover { box-shadow: 0 2px 12px var(--shadow); }
+  .diff-file-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid transparent;
+    background: var(--bg-tertiary);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .diff-file-card.expanded .diff-file-header {
+    border-bottom-color: var(--border);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-tertiary));
+  }
+  .diff-file-header:hover { background: color-mix(in srgb, var(--accent) 6%, var(--bg-tertiary)); }
+  [data-theme="dark"] .diff-file-header {
+    background: #343746;
+  }
+  [data-theme="dark"] .diff-file-card.expanded .diff-file-header {
+    background: #3d4058;
+  }
+  [data-theme="dark"] .diff-file-header:hover {
+    background: #3a3d52;
+  }
+  .diff-file-chevron {
+    font-size: 11px;
+    color: var(--text-muted);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+    width: 16px;
+    text-align: center;
+  }
+  .diff-file-card.expanded .diff-file-chevron { transform: rotate(90deg); }
+  .diff-file-name {
+    font-size: 13px;
+    font-weight: 600;
+    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .diff-file-badges {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    align-items: center;
+  }
+  .diff-file-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+  .diff-file-badge.added-count { color: #7ec89a; background: rgba(126,200,154,0.1); }
+  .diff-file-badge.removed-count { color: #ff5555; background: rgba(255,85,85,0.1); }
+  .diff-file-badge.new-file { color: #7ec89a; background: rgba(126,200,154,0.12); border: 1px solid rgba(126,200,154,0.25); }
+  .diff-file-badge.modified-file { color: var(--accent); background: var(--bg-tertiary); border: 1px solid var(--border); }
+  .diff-file-badge.deleted-file { color: #ff5555; background: rgba(255,85,85,0.12); border: 1px solid rgba(255,85,85,0.25); }
+  .diff-file-badge.renamed-file { color: #bd93f9; background: rgba(189,147,249,0.12); border: 1px solid rgba(189,147,249,0.25); }
+
+  .diff-file-summary {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 6px 14px 8px 40px;
+    line-height: 1.5;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    display: none;
+  }
+  .diff-file-card.expanded .diff-file-summary.has-summary { display: block; }
+
+  /* Diff lines */
+  .diff-file-body {
+    display: none;
+    overflow-x: auto;
+  }
+  .diff-file-card.expanded .diff-file-body { display: block; }
+  .diff-hunk-header {
+    font-size: 11px;
+    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    padding: 4px 14px;
+    border-top: 1px solid var(--border);
+    opacity: 0.8;
+    user-select: none;
+  }
+  .diff-line {
+    display: flex;
+    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.65;
+    min-height: 20px;
+    border-left: 3px solid transparent;
+  }
+  .diff-line-add {
+    background: rgba(126,200,154,0.07);
+    border-left-color: #7ec89a;
+  }
+  [data-theme="dark"] .diff-line-add {
+    background: rgba(126,200,154,0.12);
+  }
+  .diff-line-del {
+    background: rgba(255,85,85,0.06);
+    border-left-color: #ff5555;
+  }
+  [data-theme="dark"] .diff-line-del {
+    background: rgba(255,85,85,0.12);
+  }
+  .diff-line-ctx {
+    border-left-color: transparent;
+  }
+  .diff-line-gutter {
+    width: 80px;
+    min-width: 80px;
+    text-align: right;
+    padding: 0 8px 0 0;
+    color: var(--text-muted);
+    opacity: 0.5;
+    user-select: none;
+    display: flex;
+    gap: 0;
+  }
+  .diff-line-gutter span {
+    display: inline-block;
+    width: 40px;
+    text-align: right;
+  }
+  .diff-line-content {
+    flex: 1;
+    padding: 0 14px 0 6px;
+    white-space: pre;
+    tab-size: 4;
+  }
+  .diff-line-add .diff-line-content .diff-line-marker { color: #7ec89a; font-weight: 600; }
+  .diff-line-del .diff-line-content .diff-line-marker { color: #ff5555; font-weight: 600; }
+
+  /* Syntax highlighting tokens */
+  .syn-kw { color: #ff79c6; }           /* keywords — pink */
+  .syn-type { color: #8be9fd; font-style: italic; }  /* types — cyan */
+  .syn-str { color: #f1fa8c; }          /* strings — yellow */
+  .syn-num { color: #bd93f9; }          /* numbers — purple */
+  .syn-cmt { color: #6272a4; font-style: italic; }  /* comments — muted */
+  .syn-pp { color: #ff79c6; }           /* preprocessor — pink */
+  .syn-fn { color: #7ec89a; }           /* function calls — green */
+  .syn-op { color: #ff79c6; }           /* operators — pink */
+  .syn-ns { color: #ffb86c; }           /* namespace/decorator — orange */
+  /* Light theme — Monokai-inspired syntax colors */
+  .diff-line .syn-kw { color: #c7254e; }
+  .diff-line .syn-type { color: #2b8a94; font-style: italic; }
+  .diff-line .syn-str { color: #b8860b; }
+  .diff-line .syn-num { color: #7b4bb3; }
+  .diff-line .syn-cmt { color: #8e908c; font-style: italic; }
+  .diff-line .syn-pp { color: #c7254e; }
+  .diff-line .syn-fn { color: #4d8a3f; }
+  .diff-line .syn-op { color: #c7254e; }
+  .diff-line .syn-ns { color: #c46210; }
+  /* Dark mode uses Dracula palette directly */
+  [data-theme="dark"] .diff-line .syn-kw { color: #ff79c6; }
+  [data-theme="dark"] .diff-line .syn-type { color: #8be9fd; font-style: italic; }
+  [data-theme="dark"] .diff-line .syn-str { color: #f1fa8c; }
+  [data-theme="dark"] .diff-line .syn-num { color: #bd93f9; }
+  [data-theme="dark"] .diff-line .syn-cmt { color: #6272a4; font-style: italic; }
+  [data-theme="dark"] .diff-line .syn-pp { color: #ff79c6; }
+  [data-theme="dark"] .diff-line .syn-fn { color: #7ec89a; }
+  [data-theme="dark"] .diff-line .syn-op { color: #ff79c6; }
+  [data-theme="dark"] .diff-line .syn-ns { color: #ffb86c; }
+
+  /* Empty state */
+  .diff-review-empty {
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--text-muted);
+  }
+  .diff-review-empty h3 { font-size: 16px; font-weight: 500; margin-bottom: 8px; }
+  .diff-review-empty p { font-size: 13px; }
+
+  /* Search highlight in code review */
+  .diff-file-card.search-hidden { display: none; }
+  .diff-file-card.search-match .diff-file-name { color: var(--accent); }
+  .diff-tree-file.search-hidden { display: none; }
 </style>
 </head>
 <body>
@@ -500,8 +866,8 @@
   <h1>ScyllaDB Architecture</h1>
   <div class="tool-sep"></div>
   <div class="view-tabs">
-    <button class="view-tab active" id="tabArch" title="Architecture dependency graph">Architecture</button>
-    <button class="view-tab" id="tabDiff" title="Diff analysis graph">Diff Analysis</button>
+    <button class="view-tab active" id="tabArch" title="Architecture dependency graph (press Q)">Architecture</button>
+    <button class="view-tab" id="tabDiff" title="Diff analysis graph (press E)">Diff Analysis</button>
   </div>
   <div class="tool-sep"></div>
   <!-- Context area: arch and diff toolbars share this space -->
@@ -513,6 +879,7 @@
     <div class="view-tabs diff-level-tabs">
       <button class="view-tab active" data-level="peering_service" title="Service-level view (press 1)">Services</button>
       <button class="view-tab" data-level="class" title="Class-level view (press 2)">Classes</button>
+      <button class="view-tab" data-level="code-review" title="Code review view (press 3)">Code</button>
     </div>
   </div>
   <!-- Search + theme (always visible) -->
@@ -525,6 +892,10 @@
 
 <svg id="graph"></svg>
 <svg id="diffGraph" style="display:none"></svg>
+<div class="diff-review-container" id="diffReviewContainer">
+  <div class="diff-file-tree" id="diffFileTree"></div>
+  <div class="diff-review-scroll" id="diffReviewScroll"></div>
+</div>
 
 <div class="info-panel" id="infoPanel">
   <div class="info-header">
@@ -1325,6 +1696,11 @@ document.addEventListener('keydown', (e) => {
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
+  // Q / E to switch between Architecture and Diff Analysis tabs
+  const _k = e.key.toLowerCase();
+  if (_k === 'q') { switchToArch(); return; }
+  if (_k === 'e') { switchToDiff(); return; }
+
   if (e.key === 'Escape') {
     // If diff graph is active, let it handle its own Escape
     if (window.diffGraph && window.diffGraph.isActive()) return;
@@ -1609,6 +1985,7 @@ document.querySelectorAll('#diffToolbar .view-tab[data-level]').forEach(btn => {
 
 </script>
 <script src="data/diff-nodes.js"></script>
+<script src="data/diff-raw.js"></script>
 <script src="diff-graph.js"></script>
 </body>
 </html>
