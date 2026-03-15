@@ -46,11 +46,80 @@ index d891204764..7692388d07 100644
        }
      ;
  
+diff --git a/cql3/expr/expr-utils.hh b/cql3/expr/expr-utils.hh
+index ab79093da3..ef454bf80c 100644
+--- a/cql3/expr/expr-utils.hh
++++ b/cql3/expr/expr-utils.hh
+@@ -290,4 +290,14 @@ struct aggregation_split_result {
+ // are empty, and outer_loop should be evaluated for each loop.
+ aggregation_split_result split_aggregation(std::span<const expression> aggregation);
+ 
++// Replaces all bind_variable nodes in the expression tree with constant nodes
++// whose values are taken from the given query_options. This is used to produce
++// an expression that can be serialized to CQL text (since bind variables lose
++// their index information during formatting and cannot survive a round-trip
++// through CQL text).
++//
++// The expression must be prepared (bind_variable receivers must be set).
++// Throws if a bind variable value is unset.
++expression inline_bind_variables(const expression& e, const query_options& options);
++
+ }
+\ No newline at end of file
+diff --git a/cql3/expr/expression.cc b/cql3/expr/expression.cc
+index 39051be8dd..d301b92304 100644
+--- a/cql3/expr/expression.cc
++++ b/cql3/expr/expression.cc
+@@ -776,7 +776,7 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
+             },
+             [&] (const untyped_constant& uc) {
+                 if (uc.partial_type == untyped_constant::type_class::string) {
+-                    out = fmt::format_to(out, "'{}'", uc.raw_text);
++                    out = fmt::format_to(out, "{}", cql3::util::single_quote(uc.raw_text));
+                 } else {
+                     out = fmt::format_to(out, "{}", uc.raw_text);
+                 }
+@@ -899,6 +899,23 @@ expression replace_partition_token(const expression& expr, const column_definiti
+     });
+ }
+ 
++expression inline_bind_variables(const expression& e, const query_options& options) {
++    return search_and_replace(e, [&] (const expression& node) -> std::optional<expression> {
++        if (auto bv = as_if<bind_variable>(&node)) {
++            if (!bv->receiver) {
++                on_internal_error(expr_logger,
++                    "inline_bind_variables() called on unprepared expression (bind_variable has no receiver)");
++            }
++            auto value = options.get_value_at(bv->bind_index);
++            if (value.is_null()) {
++                return constant::make_null(bv->receiver->type);
++            }
++            return constant(cql3::raw_value::make_value(value), bv->receiver->type);
++        }
++        return std::nullopt;
++    });
++}
++
+ bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun) {
+     if (auto res = predicate_fun(e)) {
+         return res;
 diff --git a/cql3/query_processor.cc b/cql3/query_processor.cc
-index 9d64684772..2a33774659 100644
+index 9d64684772..616bf097cf 100644
 --- a/cql3/query_processor.cc
 +++ b/cql3/query_processor.cc
-@@ -1096,6 +1096,12 @@ query_processor::mapreduce(query::mapreduce_request req, tracing::trace_state_pt
+@@ -388,6 +388,11 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
+                             _cql_stats.filtered_reads,
+                             sm::description("Counts the total number of CQL read requests that required ALLOW FILTERING. See filtered_rows_read_total to compare how many rows needed to be filtered."))(basic_level).set_skip_when_empty(),
+ 
++                    sm::make_counter(
++                            "filtered_delete_requests",
++                            _cql_stats.filtered_deletes,
++                            sm::description("Counts the total number of CQL delete requests that required ALLOW FILTERING."))(basic_level).set_skip_when_empty(),
++
+                     // rows read with filtering enabled (because ALLOW FILTERING was required)
+                     sm::make_counter(
+                             "filtered_rows_read_total",
+@@ -1096,6 +1101,12 @@ query_processor::mapreduce(query::mapreduce_request req, tracing::trace_state_pt
      co_return co_await remote_.get().mapreducer.dispatch(std::move(req), std::move(tr_state));
  }
  
@@ -78,8 +147,25 @@ index 2bba232f44..10d86204e9 100644
      struct retry_statement_execution_error : public std::exception {};
  
      future<::shared_ptr<cql_transport::messages::result_message>>
+diff --git a/cql3/restrictions/statement_restrictions.hh b/cql3/restrictions/statement_restrictions.hh
+index af727f7fb0..c59685d76b 100644
+--- a/cql3/restrictions/statement_restrictions.hh
++++ b/cql3/restrictions/statement_restrictions.hh
+@@ -201,6 +201,12 @@ class statement_restrictions {
+         return _clustering_columns_restrictions;
+     }
+ 
++    /// Returns the full WHERE clause expression, if available.
++    /// This is the conjunction of all restrictions as received from the parser.
++    const std::optional<expr::expression>& where() const {
++        return _where;
++    }
++
+     // Get a set of columns restricted by the IS NOT NULL restriction.
+     // IS NOT NULL is a special case that is handled separately from other restrictions.
+     const std::unordered_set<const column_definition*> get_not_null_columns() const;
 diff --git a/cql3/statements/delete_statement.cc b/cql3/statements/delete_statement.cc
-index 9ca4857177..ab7bf541d3 100644
+index 9ca4857177..feccf038af 100644
 --- a/cql3/statements/delete_statement.cc
 +++ b/cql3/statements/delete_statement.cc
 @@ -12,6 +12,7 @@
@@ -90,11 +176,13 @@ index 9ca4857177..ab7bf541d3 100644
  #include "raw/delete_statement.hh"
  #include "mutation/mutation.hh"
  #include "cql3/expr/expression.hh"
-@@ -61,6 +62,34 @@ namespace raw {
+@@ -59,8 +60,29 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
+ namespace raw {
+ 
  ::shared_ptr<cql3::statements::modification_statement>
- delete_statement::prepare_internal(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
+-delete_statement::prepare_internal(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
++delete_statement::prepare_statement(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
          std::unique_ptr<attributes> attrs, cql_stats& stats) const {
-+
 +    if (_allow_filtering) {
 +        // DELETE ... ALLOW FILTERING: column-specific deletions are not supported.
 +        // Only whole-row/partition deletion makes sense with filtering.
@@ -111,29 +199,33 @@ index 9ca4857177..ab7bf541d3 100644
 +            throw exceptions::invalid_request_exception(
 +                "Conditional DELETE (IF) is not supported with ALLOW FILTERING");
 +        }
-+
-+        auto stmt = ::make_shared<cql3::statements::filtering_delete_statement>(
++        return ::make_shared<cql3::statements::filtering_delete_statement>(
 +            audit_info(), statement_type::DELETE, ctx.bound_variables_size(),
 +            schema, std::move(attrs), stats);
-+
-+        prepare_conditions(db, *schema, ctx, *stmt);
-+        stmt->process_where_clause(db, _where_clause, ctx, _allow_filtering);
-+
-+        return stmt;
 +    }
 +
      auto stmt = ::make_shared<cql3::statements::delete_statement>(audit_info(), statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
  
      for (auto&& deletion : _deletions) {
-@@ -81,7 +110,7 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
+@@ -80,9 +102,16 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
+         op->fill_prepare_context(ctx);
          stmt->add_operation(op);
      }
++    return stmt;
++}
++
++::shared_ptr<cql3::statements::modification_statement>
++delete_statement::prepare_internal(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
++        std::unique_ptr<attributes> attrs, cql_stats& stats) const {
++    auto stmt = prepare_statement(db, schema, ctx, std::move(attrs), stats);
      prepare_conditions(db, *schema, ctx, *stmt);
 -    stmt->process_where_clause(db, _where_clause, ctx);
+-    if (has_slice(stmt->restrictions().get_clustering_columns_restrictions())) {
 +    stmt->process_where_clause(db, _where_clause, ctx, _allow_filtering);
-     if (has_slice(stmt->restrictions().get_clustering_columns_restrictions())) {
++    if (!_allow_filtering && has_slice(stmt->restrictions().get_clustering_columns_restrictions())) {
          if (!schema->is_compound()) {
              throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
+         }
 @@ -98,10 +127,12 @@ delete_statement::delete_statement(cf_name name,
                                   std::vector<std::unique_ptr<operation::raw_deletion>> deletions,
                                   expr::expression where_clause,
@@ -150,10 +242,10 @@ index 9ca4857177..ab7bf541d3 100644
  }
 diff --git a/cql3/statements/filtering_delete_statement.cc b/cql3/statements/filtering_delete_statement.cc
 new file mode 100644
-index 0000000000..b0e4489312
+index 0000000000..db6b8fe0ff
 --- /dev/null
 +++ b/cql3/statements/filtering_delete_statement.cc
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,145 @@
 +/*
 + * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 + */
@@ -161,21 +253,15 @@ index 0000000000..b0e4489312
 +/* Copyright 2026-present ScyllaDB */
 +
 +#include "cql3/statements/filtering_delete_statement.hh"
++#include "cql3/expr/expr-utils.hh"
 +#include "cql3/query_processor.hh"
-+#include "cql3/selection/selection.hh"
 +#include "cql3/util.hh"
 +#include "db/consistency_level_validations.hh"
-+#include "dht/decorated_key.hh"
 +#include "gms/feature_service.hh"
-+#include "keys/clustering_bounds_comparator.hh"
-+#include "mutation/range_tombstone.hh"
-+#include "service/pager/query_pagers.hh"
 +#include "service/storage_proxy.hh"
 +#include "transport/messages/result_message.hh"
 +#include "tracing/tracing.hh"
 +#include "validation.hh"
-+
-+#include <set>
 +
 +namespace cql3 {
 +
@@ -195,34 +281,19 @@ index 0000000000..b0e4489312
 +filtering_delete_statement::optimization_tier
 +filtering_delete_statement::classify() const {
 +    auto& r = restrictions();
-+
-+    // T3: Has restrictions on non-primary-key (regular/static) columns
-+    // These require read-before-delete since the pager must evaluate
-+    // predicates on regular column values.
 +    if (r.has_non_primary_key_restriction()) {
-+        return optimization_tier::T3;
++        bool all_static = std::ranges::all_of(
++                r.get_non_pk_restriction(),
++                [] (const auto& entry) { return entry.first->is_static(); });
++        if (all_static && !r.has_clustering_columns_restriction()) {
++            return optimization_tier::partition_only;
++        }
++        return optimization_tier::regular_column;
 +    }
-+
-+    // T2: Has restrictions on clustering columns (but not regular columns)
-+    // Can apply range/row tombstones.
 +    if (r.has_clustering_columns_restriction()) {
-+        return optimization_tier::T2;
++        return optimization_tier::clustering;
 +    }
-+
-+    // T1: Partition-only predicates (or no predicates at all beyond token)
-+    // Can apply partition tombstones.
-+    return optimization_tier::T1;
-+}
-+
-+future<::shared_ptr<cql_transport::messages::result_message>>
-+filtering_delete_statement::execute(
-+    query_processor& qp,
-+    service::query_state& qs,
-+    const query_options& options,
-+    std::optional<service::group0_guard> guard) const
-+{
-+    return execute_without_checking_exception_message(qp, qs, options, std::move(guard))
-+        .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
++    return optimization_tier::partition_only;
 +}
 +
 +future<::shared_ptr<cql_transport::messages::result_message>>
@@ -232,15 +303,12 @@ index 0000000000..b0e4489312
 +    const query_options& options,
 +    std::optional<service::group0_guard> guard) const
 +{
-+    cql3::util::validate_timestamp(qp.db().get_config(), options, attrs);
-+
 +    // Feature flag check: all nodes must support filtering delete
 +    if (!qp.proxy().features().filtering_delete) {
 +        throw exceptions::invalid_request_exception(
 +            "DELETE with ALLOW FILTERING is not yet supported by all nodes in the cluster. "
 +            "Please ensure all nodes are upgraded before using this feature.");
 +    }
-+
 +    return do_execute(qp, qs, options);
 +}
 +
@@ -250,220 +318,72 @@ index 0000000000..b0e4489312
 +    service::query_state& qs,
 +    const query_options& options) const
 +{
++    cql3::util::validate_timestamp(qp.db().get_config(), options, attrs);
 +    (void)validation::validate_column_family(qp.db(), keyspace(), column_family());
 +
 +    tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 +
 +    inc_cql_stats(qs.get_client_state().is_internal());
++    ++_stats.filtered_deletes;
 +
 +    auto cl = options.get_consistency();
-+    db::validate_for_write(cl);
-+
 +    if (db::is_serial_consistency(cl)) {
 +        throw exceptions::invalid_request_exception(
 +            "SERIAL/LOCAL_SERIAL consistency is not supported for DELETE with ALLOW FILTERING");
 +    }
 +
 +    auto tier = classify();
-+    auto now = gc_clock::now();
 +    auto timestamp = options.get_timestamp(qs);
 +
-+    // All tiers use the coordinator-side filtering pager. The pager evaluates
-+    // statement_restrictions (which are not serializable for RPC) to filter
-+    // rows. The tier classification determines the tombstone type applied:
-+    //   T1: partition tombstone (all rows in matching partitions are deleted)
-+    //   T2 (prefix CK): range tombstone per partition (from clustering bounds)
-+    //   T2 (non-prefix CK) / T3: row tombstone per matching row
-+
-+    // For T2 with prefix CK restrictions, the clustering bounds from
-+    // get_clustering_bounds() are tight (e.g., WHERE c >= 3 yields [3, +inf)).
-+    // We can apply these as range tombstones to each matching partition,
-+    // instead of writing one row tombstone per row. When the CK restriction
-+    // is non-prefix (e.g., WHERE c2 = 0 without restricting c1), the bounds
-+    // are unbounded and the actual filtering is done by the pager, so we
-+    // fall back to per-row tombstones.
-+    bool t2_use_range_tombstones = (tier == optimization_tier::T2
-+                                    && !restrictions().clustering_key_restrictions_need_filtering());
-+
-+    // Include all columns in the slice so the filtering pager can evaluate
-+    // predicates on any column (PK, CK, regular, static).
-+    query::column_id_vector static_columns;
-+    query::column_id_vector regular_columns;
-+    for (auto& col : s->regular_columns()) {
-+        regular_columns.push_back(col.id);
-+    }
-+    for (auto& col : s->static_columns()) {
-+        static_columns.push_back(col.id);
++    // Map local optimization_tier to the RPC-transportable tier enum
++    query::filtering_delete_request::tier req_tier;
++    switch (tier) {
++    case optimization_tier::partition_only:
++        req_tier = query::filtering_delete_request::tier::partition_only;
++        break;
++    case optimization_tier::clustering:
++        req_tier = query::filtering_delete_request::tier::clustering;
++        break;
++    case optimization_tier::regular_column:
++        req_tier = query::filtering_delete_request::tier::regular_column;
++        break;
 +    }
 +
-+    // Get clustering bounds from restrictions (narrows the scan when possible)
-+    auto ck_bounds = restrictions().get_clustering_bounds(options);
-+    // Keep a copy for T2 range tombstones (the original is moved into the slice)
-+    auto ck_bounds_for_tombstones = t2_use_range_tombstones
-+        ? restrictions().get_clustering_bounds(options)
-+        : std::vector<query::clustering_range>();
++    // Inline bind variables into the WHERE expression and serialize to CQL text.
++    // This makes the expression self-contained for transmission to remote nodes.
++    auto& where_expr = restrictions().where();
++    if (!where_expr) {
++        throw exceptions::invalid_request_exception(
++            "DELETE with ALLOW FILTERING requires a WHERE clause");
++    }
++    auto inlined = expr::inline_bind_variables(*where_expr, options);
++    auto where_clause = cql3::util::relations_to_where_clause(inlined);
 +
-+    query::partition_slice::option_set opts;
-+    opts.set<query::partition_slice::option::send_partition_key>();
-+    opts.set<query::partition_slice::option::send_clustering_key>();
-+    opts.set<query::partition_slice::option::allow_short_read>();
-+
-+    auto slice = query::partition_slice(
-+        std::move(ck_bounds),
-+        std::move(static_columns),
-+        std::move(regular_columns),
-+        opts);
-+
-+    auto max_result_size = qp.proxy().get_max_result_size(slice);
-+
-+    auto command = make_lw_shared<query::read_command>(
-+        s->id(),
-+        s->version(),
-+        std::move(slice),
-+        max_result_size,
-+        query::tombstone_limit(qp.proxy().get_tombstone_limit()),
-+        query::row_limit::max,
-+        query::partition_limit::max,
-+        now,
-+        tracing::make_trace_info(qs.get_trace_state()),
-+        query_id::create_null_id(),
-+        query::is_first_page::no,
-+        timestamp);
-+
-+    // Get partition key ranges from restrictions (full range if PK is unrestricted)
++    // Compute partition key ranges from restrictions on the coordinator
 +    auto key_ranges = restrictions().get_partition_key_ranges(options);
 +
 +    auto timeout_duration = get_timeout(qs.get_client_state(), options);
-+    auto timeout = db::timeout_clock::now() + timeout_duration;
++    auto timeout = lowres_system_clock::now() + std::chrono::duration_cast<lowres_system_clock::duration>(timeout_duration);
 +
-+    // Build a selection that includes all columns for predicate evaluation
-+    auto all_columns = std::ranges::to<std::vector<const column_definition*>>(
-+        s->all_columns()
-+        | std::views::transform([] (const column_definition& cdef) { return &cdef; }));
-+    auto selection = cql3::selection::selection::for_columns(s, std::move(all_columns));
++    query::filtering_delete_request req{
++        .schema_id = s->id(),
++        .schema_version = s->version(),
++        .where_clause = std::move(where_clause),
++        .pr = std::move(key_ranges),
++        .cl = cl,
++        .timeout = timeout,
++        .timestamp = timestamp,
++        .optimization_tier = req_tier,
++        .shard_id_hint = std::nullopt,
++    };
 +
-+    // Create pager with filtering restrictions so the pager only returns matching rows
-+    auto filtering_restrictions = ::make_shared<const cql3::restrictions::statement_restrictions>(restrictions());
-+    auto pager = service::pager::query_pagers::pager(
-+        qp.proxy(),
-+        s,
-+        selection,
-+        qs,
-+        options,
-+        command,
-+        std::move(key_ranges),
-+        std::move(filtering_restrictions));
++    tracing::trace(qs.get_trace_state(), "Dispatching filtering delete ({}) to mapreduce service",
++                    tier == optimization_tier::partition_only ? "partition_only" :
++                    (tier == optimization_tier::clustering ? "clustering" : "regular_column"));
 +
-+    auto tombstone_ts = tombstone(timestamp, now);
-+    uint64_t total_deleted = 0;
-+    static constexpr int32_t page_size = 1000;
++    auto result = co_await qp.filtering_delete(std::move(req), qs.get_trace_state());
 +
-+    // For T1 and T2-prefix, we collect unique partition keys and apply
-+    // bulk tombstones (partition or range) after the scan, which is more
-+    // efficient than per-row tombstones.
-+    bool collect_partitions = (tier == optimization_tier::T1 || t2_use_range_tombstones);
-+    std::set<dht::decorated_key, dht::decorated_key::less_comparator> bulk_partitions{
-+        dht::decorated_key::less_comparator(s)};
-+
-+    while (!pager->is_exhausted()) {
-+        auto rs_builder = cql3::selection::result_set_builder(
-+            *selection,
-+            now,
-+            nullptr,
-+            std::vector<size_t>());
-+        co_await pager->fetch_page(rs_builder, page_size, now, timeout);
-+
-+        auto rs = rs_builder.build();
-+        auto& rows = rs->rows();
-+
-+        if (rows.empty()) {
-+            continue;
-+        }
-+
-+        utils::chunked_vector<mutation> mutations;
-+
-+        for (auto& row : rows) {
-+            // Extract partition key from the result row
-+            std::vector<bytes> pk_values;
-+            pk_values.reserve(s->partition_key_size());
-+            for (size_t i = 0; i < s->partition_key_size(); ++i) {
-+                auto& val = row[i];
-+                if (!val) {
-+                    break;
-+                }
-+                pk_values.push_back(to_bytes(*val));
-+            }
-+            if (pk_values.size() != s->partition_key_size()) {
-+                continue;
-+            }
-+            auto pk = partition_key::from_exploded(pk_values);
-+            auto dk = dht::decorate_key(*s, pk);
-+
-+            if (collect_partitions) {
-+                // Collect unique partition keys; apply bulk tombstones after the scan
-+                bulk_partitions.insert(std::move(dk));
-+            } else {
-+                // T2-nonprefix / T3: Apply row tombstones for individual matching rows
-+                std::vector<bytes> ck_values;
-+                ck_values.reserve(s->clustering_key_size());
-+                for (size_t i = s->partition_key_size();
-+                     i < s->partition_key_size() + s->clustering_key_size(); ++i) {
-+                    auto& val = row[i];
-+                    if (!val) {
-+                        break;
-+                    }
-+                    ck_values.push_back(to_bytes(*val));
-+                }
-+
-+                mutation m(s, dk);
-+                if (ck_values.empty() || s->clustering_key_size() == 0) {
-+                    m.partition().apply(tombstone_ts);
-+                } else {
-+                    auto ck = clustering_key::from_exploded(ck_values);
-+                    m.partition().apply_delete(*s, ck, tombstone_ts);
-+                }
-+                mutations.push_back(std::move(m));
-+                total_deleted++;
-+            }
-+        }
-+
-+        if (!mutations.empty()) {
-+            co_await qp.proxy().mutate(std::move(mutations), cl, timeout, qs.get_trace_state(),
-+                                        empty_service_permit(), db::allow_per_partition_rate_limit::no);
-+        }
-+    }
-+
-+    // For T1/T2-prefix, apply bulk tombstones for all collected partition keys
-+    if (collect_partitions && !bulk_partitions.empty()) {
-+        utils::chunked_vector<mutation> mutations;
-+        for (auto& dk : bulk_partitions) {
-+            mutation m(s, dk);
-+            if (tier == optimization_tier::T1) {
-+                // T1: partition tombstone — deletes entire partition
-+                m.partition().apply(tombstone_ts);
-+            } else {
-+                // T2-prefix: range tombstone(s) — deletes matching CK ranges
-+                for (auto& range : ck_bounds_for_tombstones) {
-+                    if (range.is_full()) {
-+                        m.partition().apply(tombstone_ts);
-+                    } else if (range.is_singular()) {
-+                        m.partition().apply_delete(*s, range.start()->value(), tombstone_ts);
-+                    } else {
-+                        auto bvs = bound_view::from_range(range);
-+                        m.partition().apply_delete(*s, range_tombstone(bvs.first, bvs.second, tombstone_ts));
-+                    }
-+                }
-+            }
-+            mutations.push_back(std::move(m));
-+            total_deleted++;
-+        }
-+        co_await qp.proxy().mutate(std::move(mutations), cl, timeout, qs.get_trace_state(),
-+                                    empty_service_permit(), db::allow_per_partition_rate_limit::no);
-+    }
-+
-+    tracing::trace(qs.get_trace_state(), "Filtering delete (T{}) completed: {} rows deleted",
-+                    tier == optimization_tier::T1 ? 1 : (tier == optimization_tier::T2 ? 2 : 3),
-+                    total_deleted);
++    tracing::trace(qs.get_trace_state(), "Filtering delete completed: {} rows deleted", result.rows_deleted);
 +
 +    co_return ::make_shared<cql_transport::messages::result_message::void_message>();
 +}
@@ -473,10 +393,10 @@ index 0000000000..b0e4489312
 +} // namespace cql3
 diff --git a/cql3/statements/filtering_delete_statement.hh b/cql3/statements/filtering_delete_statement.hh
 new file mode 100644
-index 0000000000..3e1b4d05ad
+index 0000000000..f8be316de0
 --- /dev/null
 +++ b/cql3/statements/filtering_delete_statement.hh
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,47 @@
 +/*
 + * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 + */
@@ -495,20 +415,10 @@ index 0000000000..3e1b4d05ad
 +// the cluster in parallel (mapreduce-style) and applies tombstones for
 +// matching rows/partitions. Unlike a normal DELETE, it does not require
 +// the full partition key to be specified.
-+//
-+// Three optimization tiers are used:
-+//   T1: Partition-only predicates (no CK/regular column restrictions) - apply partition tombstones
-+//   T2: PK + CK predicates (no regular column restrictions) - apply range/row tombstones
-+//   T3: Regular column predicates - read-before-delete, evaluate predicates, delete individually
 +class filtering_delete_statement : public delete_statement {
 +public:
 +    filtering_delete_statement(audit::audit_info_ptr&& audit_info, statement_type type, uint32_t bound_terms,
 +                               schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats);
-+
-+    // Override execute to dispatch via parallel delete infrastructure
-+    virtual future<::shared_ptr<cql_transport::messages::result_message>>
-+    execute(query_processor& qp, service::query_state& qs, const query_options& options,
-+            std::optional<service::group0_guard> guard) const override;
 +
 +    virtual future<::shared_ptr<cql_transport::messages::result_message>>
 +    execute_without_checking_exception_message(query_processor& qp, service::query_state& qs,
@@ -518,9 +428,16 @@ index 0000000000..3e1b4d05ad
 +    future<::shared_ptr<cql_transport::messages::result_message>>
 +    do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const;
 +
-+    enum class optimization_tier { T1, T2, T3 };
-+
 +    // Determine optimization tier based on the restrictions
++    enum class optimization_tier {
++        // no CK/regular column restrictions - apply partition tombstones
++        partition_only,
++        // PK + CK predicates (no regular column restrictions) - apply range/row tombstones
++        clustering,
++        // read-before-delete, evaluate predicates, delete individually
++        regular_column
++    };
++
 +    optimization_tier classify() const;
 +};
 +
@@ -582,10 +499,10 @@ index 6374e13803..30151b7a89 100644
      // CAS statement returns a result set. Prepare result set metadata
      // so that get_result_metadata() returns a meaningful value.
 diff --git a/cql3/statements/raw/delete_statement.hh b/cql3/statements/raw/delete_statement.hh
-index 5d17247f3f..c5695c9fba 100644
+index 5d17247f3f..cf43dd4d2a 100644
 --- a/cql3/statements/raw/delete_statement.hh
 +++ b/cql3/statements/raw/delete_statement.hh
-@@ -29,13 +29,18 @@ class delete_statement : public modification_statement {
+@@ -29,16 +29,24 @@ class delete_statement : public modification_statement {
  private:
      std::vector<std::unique_ptr<operation::raw_deletion>> _deletions;
      expr::expression _where_clause;
@@ -605,6 +522,12 @@ index 5d17247f3f..c5695c9fba 100644
  protected:
      virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
          prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
++private:
++    ::shared_ptr<cql3::statements::modification_statement> prepare_statement(data_dictionary::database db, schema_ptr schema,
++        prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const;
+ };
+ 
+ }
 diff --git a/cql3/statements/raw/modification_statement.hh b/cql3/statements/raw/modification_statement.hh
 index a8b6e701fa..ad2f87bf10 100644
 --- a/cql3/statements/raw/modification_statement.hh
@@ -617,6 +540,18 @@ index a8b6e701fa..ad2f87bf10 100644
      const bool _if_not_exists;
      const bool _if_exists;
  protected:
+diff --git a/cql3/stats.hh b/cql3/stats.hh
+index 21f9e00d4f..dc64c8f3c0 100644
+--- a/cql3/stats.hh
++++ b/cql3/stats.hh
+@@ -72,6 +72,7 @@ struct cql_stats {
+     int64_t secondary_index_rows_read = 0;
+ 
+     int64_t filtered_reads = 0;
++    int64_t filtered_deletes = 0;
+     int64_t filtered_rows_matched_total = 0;
+     int64_t filtered_rows_read_total = 0;
+ 
 diff --git a/gms/feature_service.hh b/gms/feature_service.hh
 index 25b532dedf..a979954388 100644
 --- a/gms/feature_service.hh
@@ -631,10 +566,10 @@ index 25b532dedf..a979954388 100644
      const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
 diff --git a/idl/filtering_delete_request.idl.hh b/idl/filtering_delete_request.idl.hh
 new file mode 100644
-index 0000000000..9885cb5bdf
+index 0000000000..968871077a
 --- /dev/null
 +++ b/idl/filtering_delete_request.idl.hh
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,39 @@
 +/*
 + * Copyright 2026-present ScyllaDB
 + */
@@ -645,18 +580,20 @@ index 0000000000..9885cb5bdf
 +
 +#include "dht/i_partitioner_fwd.hh"
 +
-+#include "idl/read_command.idl.hh"
++#include "idl/uuid.idl.hh"
 +#include "idl/consistency_level.idl.hh"
 +
 +namespace query {
 +struct filtering_delete_request {
 +    enum class tier : uint8_t {
-+        T1,
-+        T2,
-+        T3
++        partition_only,
++        clustering,
++        regular_column
 +    };
 +
-+    query::read_command cmd;
++    table_id schema_id;
++    table_schema_version schema_version;
++    sstring where_clause;
 +    dht::partition_range_vector pr;
 +
 +    db::consistency_level cl;
@@ -708,10 +645,10 @@ index 5a17f0e319..0511e632bb 100644
  
  } // namespace netw
 diff --git a/query/query-request.hh b/query/query-request.hh
-index 13a659dd3e..6d47337dd1 100644
+index 13a659dd3e..f06c25345a 100644
 --- a/query/query-request.hh
 +++ b/query/query-request.hh
-@@ -539,6 +539,34 @@ struct mapreduce_result {
+@@ -539,6 +539,36 @@ struct mapreduce_result {
  };
  
  std::ostream& operator<<(std::ostream& out, const query::mapreduce_result::printer&);
@@ -721,12 +658,14 @@ index 13a659dd3e..6d47337dd1 100644
 +// data and applies tombstones for matching rows/partitions.
 +struct filtering_delete_request {
 +    // Optimization tier determines the tombstone strategy:
-+    //   T1: partition-only predicates -> partition tombstones
-+    //   T2: PK + CK predicates -> range/row tombstones
-+    //   T3: regular column predicates -> read-before-delete, per-row tombstones
-+    enum class tier : uint8_t { T1, T2, T3 };
++    //   partition_only: partition-only predicates -> partition tombstones
++    //   clustering: PK + CK predicates -> range/row tombstones
++    //   regular_column: regular column predicates -> read-before-delete, per-row tombstones
++    enum class tier : uint8_t { partition_only, clustering, regular_column };
 +
-+    query::read_command cmd;           // Read command for scanning data
++    table_id schema_id;                // Table identity
++    table_schema_version schema_version; // Schema version for validation
++    sstring where_clause;              // CQL WHERE clause with bind variables inlined
 +    dht::partition_range_vector pr;    // Partition ranges to scan
 +    db::consistency_level cl;          // Consistency level for writes
 +    lowres_system_clock::time_point timeout;
@@ -746,7 +685,7 @@ index 13a659dd3e..6d47337dd1 100644
  }
  
  
-@@ -549,3 +577,6 @@ template <> struct fmt::formatter<query::mapreduce_request> : fmt::ostream_forma
+@@ -549,3 +579,6 @@ template <> struct fmt::formatter<query::mapreduce_request> : fmt::ostream_forma
  template <> struct fmt::formatter<query::mapreduce_request::reduction_type> : fmt::ostream_formatter {};
  template <> struct fmt::formatter<query::mapreduce_request::aggregation_info> : fmt::ostream_formatter {};
  template <> struct fmt::formatter<query::mapreduce_result::printer> : fmt::ostream_formatter {};
@@ -754,25 +693,27 @@ index 13a659dd3e..6d47337dd1 100644
 +template <> struct fmt::formatter<query::filtering_delete_request::tier> : fmt::ostream_formatter {};
 +template <> struct fmt::formatter<query::filtering_delete_result> : fmt::ostream_formatter {};
 diff --git a/query/query.cc b/query/query.cc
-index eb8d698f49..8169a47327 100644
+index eb8d698f49..2fdd42af4f 100644
 --- a/query/query.cc
 +++ b/query/query.cc
-@@ -412,6 +412,29 @@ std::ostream& operator<<(std::ostream& out, const query::mapreduce_result::print
+@@ -412,6 +412,31 @@ std::ostream& operator<<(std::ostream& out, const query::mapreduce_result::print
      return out << "]";
  }
  
 +std::ostream& operator<<(std::ostream& out, const query::filtering_delete_request::tier& t) {
 +    switch (t) {
-+    case query::filtering_delete_request::tier::T1: return out << "T1";
-+    case query::filtering_delete_request::tier::T2: return out << "T2";
-+    case query::filtering_delete_request::tier::T3: return out << "T3";
++    case query::filtering_delete_request::tier::partition_only: return out << "partition_only";
++    case query::filtering_delete_request::tier::clustering: return out << "clustering";
++    case query::filtering_delete_request::tier::regular_column: return out << "regular_column";
 +    }
 +    return out << "unknown";
 +}
 +
 +std::ostream& operator<<(std::ostream& out, const query::filtering_delete_request& r) {
 +    return out << "filtering_delete_request{"
-+        << "schema_version=" << r.cmd.schema_version
++        << "schema_id=" << r.schema_id
++        << ", schema_version=" << r.schema_version
++        << ", where_clause=" << r.where_clause
 +        << ", pr_size=" << r.pr.size()
 +        << ", cl=" << fmt::format("{}", r.cl)
 +        << ", tier=" << r.optimization_tier
@@ -788,7 +729,7 @@ index eb8d698f49..8169a47327 100644
  
  std::optional<query::clustering_range> position_range_to_clustering_range(const position_range& r, const schema& s) {
 diff --git a/service/mapreduce_service.cc b/service/mapreduce_service.cc
-index 816ea37a9a..f947384364 100644
+index 816ea37a9a..4035223101 100644
 --- a/service/mapreduce_service.cc
 +++ b/service/mapreduce_service.cc
 @@ -20,6 +20,7 @@
@@ -799,15 +740,27 @@ index 816ea37a9a..f947384364 100644
  #include "locator/abstract_replication_strategy.hh"
  #include "utils/error_injection.hh"
  #include "utils/log.hh"
-@@ -29,6 +30,7 @@
+@@ -29,6 +30,9 @@
  #include "replica/database.hh"
  #include "schema/schema.hh"
  #include "schema/schema_registry.hh"
 +#include "mutation/mutation.hh"
++#include "mutation/range_tombstone.hh"
++#include "keys/clustering_bounds_comparator.hh"
  #include <seastar/core/future.hh>
  #include <seastar/core/on_internal_error.hh>
  #include <seastar/core/when_all.hh>
-@@ -550,10 +552,17 @@ void mapreduce_service::init_messaging_service() {
+@@ -47,6 +51,9 @@
+ #include "cql3/functions/functions.hh"
+ #include "cql3/functions/aggregate_fcts.hh"
+ #include "cql3/expr/expr-utils.hh"
++#include "cql3/restrictions/statement_restrictions.hh"
++#include "cql3/statements/select_statement.hh"
++#include "cql3/util.hh"
+ 
+ namespace service {
+ 
+@@ -550,10 +557,17 @@ void mapreduce_service::init_messaging_service() {
              return dispatch_to_shards(req, tr_info);
          }
      );
@@ -826,7 +779,7 @@ index 816ea37a9a..f947384364 100644
  }
  
  future<> mapreduce_service::dispatch_range_and_reduce(const locator::effective_replication_map_ptr& erm, retrying_dispatcher& dispatcher, const query::mapreduce_request& req, query::mapreduce_request&& req_with_modified_pr, locator::host_id addr, query::mapreduce_result& shared_accumulator, tracing::trace_state_ptr tr_state) {
-@@ -816,6 +825,472 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
+@@ -816,6 +830,542 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
      }
  }
  
@@ -917,7 +870,8 @@ index 816ea37a9a..f947384364 100644
 +    tracing::trace(tr_state, "Executing filtering_delete_request");
 +    _stats.requests_executed += 1;
 +
-+    schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
++    schema_ptr schema = local_schema_registry().get(req.schema_version);
++    auto db = _db.local().as_data_dictionary();
 +
 +    lowres_system_clock::duration time_left = req.timeout - lowres_system_clock::now();
 +    lowres_clock::time_point timeout_point = lowres_clock::now() + time_left;
@@ -926,19 +880,56 @@ index 816ea37a9a..f947384364 100644
 +    auto ts = req.timestamp;
 +    auto cl = req.cl;
 +
-+    // Build a selection for primary key columns (needed to reconstruct keys from scan results)
-+    auto key_columns = std::ranges::to<std::vector<const column_definition*>>(
++    // Re-parse the WHERE clause and prepare a select statement (MV pattern).
++    // This gives us: restrictions (for filtering), selection (all columns),
++    // and a partition_slice (with clustering bounds from the WHERE clause).
++    auto raw = cql3::util::build_select_statement(
++        schema->cf_name(), req.where_clause, true /* select_all_columns */, schema->all_columns());
++    raw->prepare_keyspace(schema->ks_name());
++    raw->set_bound_variables({});
++    cql3::cql_stats ignored_stats;
++    auto prepared = raw->prepare(db, ignored_stats, true /* for_view */);
++    auto select_stmt = static_pointer_cast<cql3::statements::select_statement>(prepared->statement);
++
++    // Build selection, partition_slice, and read_command from the re-prepared statement.
++    auto empty_options = cql3::query_options({});
++    auto slice = select_stmt->make_partition_slice(empty_options);
++    // Ensure the pager sends partition and clustering keys so we can reconstruct them
++    slice.options.set<query::partition_slice::option::send_partition_key>();
++    slice.options.set<query::partition_slice::option::send_clustering_key>();
++    slice.options.set<query::partition_slice::option::allow_short_read>();
++
++    auto max_result_size = _proxy.get_max_result_size(slice);
++
++    auto command = make_lw_shared<query::read_command>(
++        schema->id(),
++        schema->version(),
++        std::move(slice),
++        max_result_size,
++        query::tombstone_limit(_proxy.get_tombstone_limit()),
++        query::row_limit::max,
++        query::partition_limit::max,
++        now,
++        tracing::make_trace_info(tr_state),
++        query_id::create_null_id(),
++        query::is_first_page::no,
++        ts);
++
++    // Build a selection that includes all columns (for predicate evaluation and key extraction)
++    auto all_columns = std::ranges::to<std::vector<const column_definition*>>(
 +        schema->all_columns()
-+        | std::views::filter([] (const column_definition& cdef) { return cdef.is_primary_key(); })
-+        | std::views::transform([] (const column_definition& cdef) { return &cdef; } ));
-+    auto selection = cql3::selection::selection::for_columns(schema, key_columns);
++        | std::views::transform([] (const column_definition& cdef) { return &cdef; }));
++    auto selection = cql3::selection::selection::for_columns(schema, std::move(all_columns));
++
++    // Get filtering restrictions from the re-prepared select statement
++    auto filtering_restrictions = select_stmt->get_restrictions();
 +
 +    auto query_state = make_lw_shared<service::query_state>(
 +        client_state::for_internal_calls(),
 +        tr_state,
 +        empty_service_permit()
 +    );
-+    auto query_options = make_lw_shared<cql3::query_options>(
++    auto query_opts = make_lw_shared<cql3::query_options>(
 +        cql3::default_cql_config,
 +        cl,
 +        std::optional<std::vector<std::string_view>>(),
@@ -946,6 +937,13 @@ index 816ea37a9a..f947384364 100644
 +        true, // skip metadata
 +        cql3::query_options::specific_options::DEFAULT
 +    );
++
++    // For clustering tier with prefix restrictions, prepare clustering bounds for range tombstones
++    bool use_range_tombstones = (req.optimization_tier == query::filtering_delete_request::tier::clustering
++                                 && !filtering_restrictions->clustering_key_restrictions_need_filtering());
++    auto ck_bounds_for_tombstones = use_range_tombstones
++        ? filtering_restrictions->get_clustering_bounds(empty_options)
++        : std::vector<query::clustering_range>();
 +
 +    // Iterate through partition ranges owned by this shard
 +    static constexpr size_t max_ranges = 256;
@@ -955,6 +953,13 @@ index 816ea37a9a..f947384364 100644
 +
 +    uint64_t total_deleted = 0;
 +    std::optional<dht::partition_range> current_range;
++
++    // For partition_only and clustering-prefix, collect unique partition keys and apply
++    // bulk tombstones after the scan.
++    bool collect_partitions = (req.optimization_tier == query::filtering_delete_request::tier::partition_only
++                               || use_range_tombstones);
++    std::set<dht::decorated_key, dht::decorated_key::less_comparator> bulk_partitions{
++        dht::decorated_key::less_comparator(schema)};
 +
 +    do {
 +        while ((current_range = owned_iter.next(*schema))) {
@@ -974,10 +979,10 @@ index 816ea37a9a..f947384364 100644
 +            schema,
 +            selection,
 +            *query_state,
-+            *query_options,
-+            make_lw_shared<query::read_command>(req.cmd),
++            *query_opts,
++            command,
 +            std::move(ranges_owned_by_this_shard),
-+            nullptr // No filtering restrictions for pager (filtering is done by read_command slice)
++            filtering_restrictions
 +        );
 +
 +        while (!pager->is_exhausted()) {
@@ -1022,17 +1027,11 @@ index 816ea37a9a..f947384364 100644
 +                auto pk = partition_key::from_exploded(pk_values);
 +                auto dk = dht::decorate_key(*schema, pk);
 +
-+                switch (req.optimization_tier) {
-+                case query::filtering_delete_request::tier::T1: {
-+                    // Partition tombstone - one per unique partition
-+                    mutation m(schema, dk);
-+                    m.partition().apply(tombstone_ts);
-+                    mutations.push_back(std::move(m));
-+                    break;
-+                }
-+                case query::filtering_delete_request::tier::T2:
-+                case query::filtering_delete_request::tier::T3: {
-+                    // Row tombstone - extract clustering key and delete specific rows
++                if (collect_partitions) {
++                    // Collect unique partition keys; apply bulk tombstones after the scan
++                    bulk_partitions.insert(std::move(dk));
++                } else {
++                    // clustering-nonprefix / regular_column: per-row tombstones
 +                    std::vector<bytes> ck_values;
 +                    ck_values.reserve(schema->clustering_key_size());
 +                    for (size_t i = schema->partition_key_size();
@@ -1043,6 +1042,7 @@ index 816ea37a9a..f947384364 100644
 +                        }
 +                        ck_values.push_back(to_bytes(*val));
 +                    }
++
 +                    mutation m(schema, dk);
 +                    if (ck_values.empty() || schema->clustering_key_size() == 0) {
 +                        m.partition().apply(tombstone_ts);
@@ -1051,11 +1051,8 @@ index 816ea37a9a..f947384364 100644
 +                        m.partition().apply_delete(*schema, ck, tombstone_ts);
 +                    }
 +                    mutations.push_back(std::move(m));
-+                    break;
++                    total_deleted++;
 +                }
-+                }
-+
-+                total_deleted++;
 +            }
 +
 +            if (!mutations.empty()) {
@@ -1067,6 +1064,35 @@ index 816ea37a9a..f947384364 100644
 +        ranges_owned_by_this_shard.clear();
 +    } while (current_range);
 +
++    // For partition_only/clustering-prefix, apply bulk tombstones for all collected partition keys
++    if (collect_partitions && !bulk_partitions.empty()) {
++        utils::chunked_vector<mutation> mutations;
++        auto tombstone_ts = tombstone(ts, now);
++        for (auto& dk : bulk_partitions) {
++            mutation m(schema, dk);
++            if (req.optimization_tier == query::filtering_delete_request::tier::partition_only) {
++                // Partition tombstone — deletes entire partition
++                m.partition().apply(tombstone_ts);
++            } else {
++                // Clustering-prefix: range tombstone(s) — deletes matching CK ranges
++                for (auto& range : ck_bounds_for_tombstones) {
++                    if (range.is_full()) {
++                        m.partition().apply(tombstone_ts);
++                    } else if (range.is_singular()) {
++                        m.partition().apply_delete(*schema, range.start()->value(), tombstone_ts);
++                    } else {
++                        auto bvs = bound_view::from_range(range);
++                        m.partition().apply_delete(*schema, range_tombstone(bvs.first, bvs.second, tombstone_ts));
++                    }
++                }
++            }
++            mutations.push_back(std::move(m));
++            total_deleted++;
++        }
++        auto write_timeout = db::timeout_clock::now() + std::chrono::duration_cast<db::timeout_clock::duration>(time_left);
++        co_await _proxy.mutate(std::move(mutations), cl, write_timeout, tr_state, empty_service_permit(), db::allow_per_partition_rate_limit::no);
++    }
++
 +    flogger.debug("Filtering delete: deleted {} rows on this shard", total_deleted);
 +    tracing::trace(tr_state, "Filtering delete: deleted {} rows on this shard", total_deleted);
 +
@@ -1075,7 +1101,6 @@ index 816ea37a9a..f947384364 100644
 +
 +future<> mapreduce_service::dispatch_delete_range_and_reduce(
 +    const locator::effective_replication_map_ptr& erm,
-+    retrying_dispatcher& dispatcher,
 +    const query::filtering_delete_request& req,
 +    query::filtering_delete_request&& req_with_modified_pr,
 +    locator::host_id addr,
@@ -1121,14 +1146,12 @@ index 816ea37a9a..f947384364 100644
 +    tracing::trace(tr_state, "Dispatching filtering_delete_request to {} endpoints", vnodes_per_addr.size());
 +    flogger.debug("dispatching filtering_delete_request to {} endpoints", vnodes_per_addr.size());
 +
-+    retrying_dispatcher dispatcher(*this, tr_state);
-+
 +    co_await coroutine::parallel_for_each(vnodes_per_addr,
 +            [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
 +        locator::host_id addr = vnodes_with_addr.first;
 +        query::filtering_delete_request req_with_modified_pr = req;
 +        req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
-+        co_await dispatch_delete_range_and_reduce(erm, dispatcher, req, std::move(req_with_modified_pr), addr, result, tr_state);
++        co_await dispatch_delete_range_and_reduce(erm, req, std::move(req_with_modified_pr), addr, result, tr_state);
 +    });
 +}
 +
@@ -1280,7 +1303,7 @@ index 816ea37a9a..f947384364 100644
 +    query::filtering_delete_request req,
 +    tracing::trace_state_ptr tr_state
 +) {
-+    schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
++    schema_ptr schema = local_schema_registry().get(req.schema_version);
 +    replica::table& cf = _db.local().find_column_family(schema);
 +
 +    query::filtering_delete_result result;
@@ -1300,7 +1323,7 @@ index 816ea37a9a..f947384364 100644
      namespace sm = seastar::metrics;
      _metrics.add_group("mapreduce_service", {
 diff --git a/service/mapreduce_service.hh b/service/mapreduce_service.hh
-index 405be7253a..f514229967 100644
+index 405be7253a..93bcd7c835 100644
 --- a/service/mapreduce_service.hh
 +++ b/service/mapreduce_service.hh
 @@ -177,6 +177,11 @@ class mapreduce_service : public seastar::peering_sharded_service<mapreduce_serv
@@ -1320,7 +1343,7 @@ index 405be7253a..f514229967 100644
      future<query::mapreduce_result> execute_on_this_shard(query::mapreduce_request req, std::optional<tracing::trace_info> tr_info);
  
 +    // Filtering delete dispatch methods - mirror the mapreduce dispatch pattern
-+    future<> dispatch_delete_range_and_reduce(const locator::effective_replication_map_ptr& erm, retrying_dispatcher& dispatcher, const query::filtering_delete_request& req, query::filtering_delete_request&& req_with_modified_pr, locator::host_id addr, query::filtering_delete_result& result, tracing::trace_state_ptr tr_state);
++    future<> dispatch_delete_range_and_reduce(const locator::effective_replication_map_ptr& erm, const query::filtering_delete_request& req, query::filtering_delete_request&& req_with_modified_pr, locator::host_id addr, query::filtering_delete_result& result, tracing::trace_state_ptr tr_state);
 +    future<> dispatch_delete_to_vnodes(schema_ptr schema, replica::column_family& cf, query::filtering_delete_request& req, query::filtering_delete_result& result, tracing::trace_state_ptr tr_state);
 +    future<> dispatch_delete_to_tablets(schema_ptr schema, replica::column_family& cf, query::filtering_delete_request& req, query::filtering_delete_result& result, tracing::trace_state_ptr tr_state);
 +    future<query::filtering_delete_result> dispatch_delete_to_shards(query::filtering_delete_request req, std::optional<tracing::trace_info> tr_info);
@@ -1337,158 +1360,365 @@ index 405be7253a..f514229967 100644
  };
  
  } // namespace service
-diff --git a/test/boost/filtering_test.cc b/test/boost/filtering_test.cc
-index 01d5e73218..2b1e16011b 100644
---- a/test/boost/filtering_test.cc
-+++ b/test/boost/filtering_test.cc
-@@ -17,6 +17,7 @@
- #include <seastar/testing/test_case.hh>
- #include "test/lib/cql_test_env.hh"
- #include "test/lib/cql_assertions.hh"
-+#include "test/lib/exception_utils.hh"
- 
- #include <seastar/core/future-util.hh>
- #include <seastar/core/sleep.hh>
-@@ -1154,4 +1155,104 @@ SEASTAR_TEST_CASE(test_filtering) {
-     });
+diff --git a/test/boost/expr_test.cc b/test/boost/expr_test.cc
+index ce1d26cc6b..211bc1c5d2 100644
+--- a/test/boost/expr_test.cc
++++ b/test/boost/expr_test.cc
+@@ -4818,3 +4818,101 @@ BOOST_AUTO_TEST_CASE(test_levellize_aggregation_depth) {
+     // Somewhat fragile, but easiest way to test entire structure
+     BOOST_REQUIRE_EQUAL(fmt::format("{:debug}", e2), "foo.my_agg(system.sum(system.$$first$$(r)), system.$$first$$(system.$$first$$(TTL(r))))");
  }
++
++// Tests for proper escaping in expression formatting.
++
++BOOST_AUTO_TEST_CASE(expr_printer_text_constant_with_quotes) {
++    // A text constant containing single quotes must be properly escaped
++    // when printed with {:user} formatter.
++    auto val = make_text_const("it's a 'test'");
++    auto result = expr_print(val);
++    BOOST_REQUIRE_EQUAL(result, "'it''s a ''test'''");
++}
++
++BOOST_AUTO_TEST_CASE(expr_printer_untyped_string_constant_with_quotes) {
++    // An untyped_constant of string type with embedded quotes must be escaped.
++    auto val = make_string_untyped("it's");
++    auto result = expr_print(val);
++    BOOST_REQUIRE_EQUAL(result, "'it''s'");
++}
++
++BOOST_AUTO_TEST_CASE(expr_printer_text_constant_round_trip) {
++    // Formatting a text constant and re-parsing should yield the same WHERE clause.
++    // This tests the full round-trip: constant -> CQL text -> parse -> CQL text
++    auto text_const = make_text_const("it's a 'test'");
++    binary_operator eq {
++        make_column("col"),
++        oper_t::EQ,
++        text_const
++    };
++    auto printed = expr_print(eq);
++    BOOST_REQUIRE_EQUAL(printed, "col = 'it''s a ''test'''");
++
++    // Parse it back and print again — should be stable
++    expression reparsed = cql3::util::where_clause_to_relations(printed, cql3::dialect{});
++    sstring reprinted = cql3::util::relations_to_where_clause(reparsed);
++    BOOST_REQUIRE_EQUAL(printed, reprinted);
++}
++
++BOOST_AUTO_TEST_CASE(expr_printer_blob_constant_format) {
++    // A blob constant should be printed with 0x prefix.
++    bytes blob_val{int8_t(0xca), int8_t(0xfe)};
++    auto raw = cql3::raw_value::make_value(blob_val);
++    constant c(raw, bytes_type);
++    auto result = expr_print(c);
++    BOOST_REQUIRE_EQUAL(result, "0xcafe");
++}
++
++BOOST_AUTO_TEST_CASE(test_inline_bind_variables) {
++    // inline_bind_variables should replace bind_variable nodes with constant nodes
++    // using values from query_options.
++    auto bv = new_bind_variable(0, int32_type);
++    binary_operator eq {
++        make_column("col"),
++        oper_t::EQ,
++        bv
++    };
++
++    // Create query options with bind variable value = 42
++    auto raw_values = cql3::raw_value_vector_with_unset({cql3::raw_value::make_value(int32_type->decompose(int32_t(42)))});
++    cql3::query_options opts(std::move(raw_values));
++
++    auto inlined = inline_bind_variables(eq, opts);
++    auto printed = expr_print(inlined);
++    BOOST_REQUIRE_EQUAL(printed, "col = 42");
++}
++
++BOOST_AUTO_TEST_CASE(test_inline_bind_variables_text_with_quotes) {
++    // inline_bind_variables + formatting should produce properly escaped CQL text.
++    auto bv = new_bind_variable(0, utf8_type);
++    binary_operator eq {
++        make_column("col"),
++        oper_t::EQ,
++        bv
++    };
++
++    // Create query options with bind variable value = "it's"
++    auto raw_values = cql3::raw_value_vector_with_unset({cql3::raw_value::make_value(utf8_type->decompose(sstring("it's")))});
++    cql3::query_options opts(std::move(raw_values));
++
++    auto inlined = inline_bind_variables(eq, opts);
++    auto printed = expr_print(inlined);
++    BOOST_REQUIRE_EQUAL(printed, "col = 'it''s'");
++}
++
++BOOST_AUTO_TEST_CASE(test_inline_bind_variables_null) {
++    // inline_bind_variables should handle null bind variable values.
++    auto bv = new_bind_variable(0, int32_type);
++    binary_operator eq {
++        make_column("col"),
++        oper_t::EQ,
++        bv
++    };
++
++    auto raw_values = cql3::raw_value_vector_with_unset({cql3::raw_value::make_null()});
++    cql3::query_options opts(std::move(raw_values));
++
++    auto inlined = inline_bind_variables(eq, opts);
++    auto printed = expr_print(inlined);
++    BOOST_REQUIRE_EQUAL(printed, "col = null");
++}
+diff --git a/test/boost/types_test.cc b/test/boost/types_test.cc
+index c6ba860ae0..2c9a7b94a9 100644
+--- a/test/boost/types_test.cc
++++ b/test/boost/types_test.cc
+@@ -23,6 +23,7 @@
+ #include "types/list.hh"
+ #include "types/set.hh"
+ #include "types/vector.hh"
++#include "types/user.hh"
+ #include "test/lib/exception_utils.hh"
+ #include "test/lib/test_utils.hh"
  
-+// ---------------------------------------------------------------------------
-+// DELETE ... ALLOW FILTERING tests
-+// ---------------------------------------------------------------------------
+@@ -1024,3 +1025,93 @@ SEASTAR_TEST_CASE(test_list_type_serialization) {
+     BOOST_REQUIRE_EQUAL(list, list_type->deserialize_value(managed_bytes_view(*ser)));
+     return make_ready_future<>();
+ }
 +
-+SEASTAR_TEST_CASE(test_delete_allow_filtering_column_specific_rejected) {
-+    return do_with_cql_env_thread([] (cql_test_env& e) {
-+        e.execute_cql("CREATE TABLE daf_col (p int, c int, v int, PRIMARY KEY(p, c));").get();
-+        BOOST_REQUIRE_EXCEPTION(
-+            e.execute_cql("DELETE v FROM daf_col WHERE v = 10 ALLOW FILTERING;").get(),
-+            exceptions::invalid_request_exception,
-+            exception_predicate::message_contains("Column-specific deletions are not supported"));
-+    });
++// Tests for to_parsable_string() producing valid, re-parsable CQL literals.
++
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_text_with_single_quotes) {
++    // A text value containing single quotes must be escaped by doubling them.
++    data_value val(sstring("it's a 'test'"));
++    auto result = val.to_parsable_string();
++    // Expected: 'it''s a ''test'''
++    BOOST_REQUIRE_EQUAL(result, "'it''s a ''test'''");
 +}
 +
-+SEASTAR_TEST_CASE(test_delete_allow_filtering_if_exists_rejected) {
-+    return do_with_cql_env_thread([] (cql_test_env& e) {
-+        e.execute_cql("CREATE TABLE daf_ifexists (p int, c int, v int, PRIMARY KEY(p, c));").get();
-+        BOOST_REQUIRE_EXCEPTION(
-+            e.execute_cql("DELETE FROM daf_ifexists WHERE v = 10 IF EXISTS ALLOW FILTERING;").get(),
-+            exceptions::invalid_request_exception,
-+            exception_predicate::message_contains("Conditional DELETE"));
-+    });
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_text_plain) {
++    // A text value without special characters should be wrapped in single quotes.
++    data_value val(sstring("hello world"));
++    auto result = val.to_parsable_string();
++    BOOST_REQUIRE_EQUAL(result, "'hello world'");
 +}
 +
-+SEASTAR_TEST_CASE(test_delete_allow_filtering_regular_column) {
-+    return do_with_cql_env_thread([] (cql_test_env& e) {
-+        e.execute_cql("CREATE TABLE daf_reg (p int, c int, v int, PRIMARY KEY(p, c));").get();
-+
-+        for (int p = 0; p < 3; ++p) {
-+            for (int c = 0; c < 3; ++c) {
-+                e.execute_cql(format("INSERT INTO daf_reg (p, c, v) VALUES ({}, {}, {})", p, c, c)).get();
-+            }
-+        }
-+
-+        // Delete all rows where v = 1 (T3 tier)
-+        e.execute_cql("DELETE FROM daf_reg WHERE v = 1 ALLOW FILTERING;").get();
-+
-+        auto msg = e.execute_cql("SELECT p, c, v FROM daf_reg;").get();
-+        assert_that(msg).is_rows().with_rows_ignore_order({
-+            // v=0 rows remain
-+            { int32_type->decompose(0), int32_type->decompose(0), int32_type->decompose(0) },
-+            { int32_type->decompose(1), int32_type->decompose(0), int32_type->decompose(0) },
-+            { int32_type->decompose(2), int32_type->decompose(0), int32_type->decompose(0) },
-+            // v=2 rows remain
-+            { int32_type->decompose(0), int32_type->decompose(2), int32_type->decompose(2) },
-+            { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(2) },
-+            { int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(2) },
-+        });
-+    });
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_text_empty) {
++    // An empty text value should produce ''
++    data_value val(sstring(""));
++    auto result = val.to_parsable_string();
++    BOOST_REQUIRE_EQUAL(result, "''");
 +}
 +
-+SEASTAR_TEST_CASE(test_delete_allow_filtering_clustering_range) {
-+    return do_with_cql_env_thread([] (cql_test_env& e) {
-+        e.execute_cql("CREATE TABLE daf_ck (p int, c int, v int, PRIMARY KEY(p, c));").get();
-+
-+        for (int p = 0; p < 2; ++p) {
-+            for (int c = 0; c < 4; ++c) {
-+                e.execute_cql(format("INSERT INTO daf_ck (p, c, v) VALUES ({}, {}, {})", p, c, c * 10)).get();
-+            }
-+        }
-+
-+        // Delete all rows where c >= 2 (T2 tier)
-+        e.execute_cql("DELETE FROM daf_ck WHERE c >= 2 ALLOW FILTERING;").get();
-+
-+        auto msg = e.execute_cql("SELECT p, c, v FROM daf_ck;").get();
-+        assert_that(msg).is_rows().with_rows_ignore_order({
-+            { int32_type->decompose(0), int32_type->decompose(0), int32_type->decompose(0) },
-+            { int32_type->decompose(0), int32_type->decompose(1), int32_type->decompose(10) },
-+            { int32_type->decompose(1), int32_type->decompose(0), int32_type->decompose(0) },
-+            { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(10) },
-+        });
-+    });
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_ascii_with_single_quotes) {
++    // ASCII type also uses single_quote() escaping.
++    auto val = data_value(ascii_native_type{sstring("it's")});
++    auto result = val.to_parsable_string();
++    BOOST_REQUIRE_EQUAL(result, "'it''s'");
 +}
 +
-+SEASTAR_TEST_CASE(test_delete_allow_filtering_empty_table) {
-+    return do_with_cql_env_thread([] (cql_test_env& e) {
-+        e.execute_cql("CREATE TABLE daf_empty (p int, c int, v int, PRIMARY KEY(p, c));").get();
-+
-+        // Should succeed without error on empty table
-+        e.execute_cql("DELETE FROM daf_empty WHERE v = 42 ALLOW FILTERING;").get();
-+
-+        auto msg = e.execute_cql("SELECT * FROM daf_empty;").get();
-+        assert_that(msg).is_rows().is_empty();
-+    });
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_blob_hex_prefix) {
++    // Blob values must have a 0x prefix in CQL.
++    bytes blob_val{int8_t(0xde), int8_t(0xad), int8_t(0xbe), int8_t(0xef)};
++    data_value val(blob_val);
++    auto result = val.to_parsable_string();
++    BOOST_REQUIRE_EQUAL(result, "0xdeadbeef");
 +}
 +
-+SEASTAR_TEST_CASE(test_delete_allow_filtering_no_match) {
-+    return do_with_cql_env_thread([] (cql_test_env& e) {
-+        e.execute_cql("CREATE TABLE daf_nomatch (p int, c int, v int, PRIMARY KEY(p, c));").get();
-+        e.execute_cql("INSERT INTO daf_nomatch (p, c, v) VALUES (1, 1, 10)").get();
-+        e.execute_cql("INSERT INTO daf_nomatch (p, c, v) VALUES (2, 2, 20)").get();
-+
-+        // No rows match v = 999
-+        e.execute_cql("DELETE FROM daf_nomatch WHERE v = 999 ALLOW FILTERING;").get();
-+
-+        auto msg = e.execute_cql("SELECT p, c, v FROM daf_nomatch;").get();
-+        assert_that(msg).is_rows().with_size(2);
-+    });
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_blob_empty) {
++    // An empty blob should produce 0x
++    data_value val(bytes{});
++    auto result = val.to_parsable_string();
++    BOOST_REQUIRE_EQUAL(result, "0x");
 +}
 +
- BOOST_AUTO_TEST_SUITE_END()
-diff --git a/test/cqlpy/test_delete_allow_filtering.py b/test/cqlpy/test_delete_allow_filtering.py
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_udt_field_names_quoted) {
++    // UDT field names that are CQL reserved words or contain special
++    // characters should be properly quoted.
++    auto udt = user_type_impl::get_instance(
++        "ks", to_bytes("test_type"),
++        {to_bytes("select"), to_bytes("normal"), to_bytes("With Spaces")},
++        {int32_type, utf8_type, int32_type},
++        true);
++    std::vector<data_value> fields;
++    fields.push_back(data_value(int32_t(42)));
++    fields.push_back(data_value(sstring("hello")));
++    fields.push_back(data_value(int32_t(7)));
++    auto val = make_user_value(udt, std::move(fields));
++    auto result = val.to_parsable_string();
++    // "select" is a reserved word -> must be double-quoted
++    // "normal" needs no quoting
++    // "With Spaces" has uppercase and spaces -> must be double-quoted
++    BOOST_REQUIRE(result.find("\"select\"") != sstring::npos);
++    BOOST_REQUIRE(result.find("normal") != sstring::npos);
++    BOOST_REQUIRE(result.find("\"With Spaces\"") != sstring::npos);
++}
++
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_udt_text_field_escaping) {
++    // UDT text field values should have their single quotes escaped.
++    auto udt = user_type_impl::get_instance(
++        "ks", to_bytes("test_type"),
++        {to_bytes("name")},
++        {utf8_type},
++        true);
++    std::vector<data_value> fields;
++    fields.push_back(data_value(sstring("it's")));
++    auto val = make_user_value(udt, std::move(fields));
++    auto result = val.to_parsable_string();
++    // The text value inside the UDT should be properly escaped
++    BOOST_REQUIRE(result.find("'it''s'") != sstring::npos);
++}
++
++BOOST_AUTO_TEST_CASE(test_to_parsable_string_int) {
++    // Simple integer should not be quoted.
++    data_value val(int32_t(42));
++    auto result = val.to_parsable_string();
++    BOOST_REQUIRE_EQUAL(result, "42");
++}
+diff --git a/test/cluster/test_delete_allow_filtering.py b/test/cluster/test_delete_allow_filtering.py
 new file mode 100644
-index 0000000000..8106959562
+index 0000000000..6b2025232f
 --- /dev/null
-+++ b/test/cqlpy/test_delete_allow_filtering.py
-@@ -0,0 +1,328 @@
++++ b/test/cluster/test_delete_allow_filtering.py
+@@ -0,0 +1,116 @@
 +# Copyright 2026-present ScyllaDB
 +#
 +# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 +
-+#############################################################################
++# Multi-node cluster tests for DELETE ... ALLOW FILTERING.
++#
++# Basic predicate/syntax tests live in test/cqlpy/test_delete_allow_filtering.py.
++
++import asyncio
++import logging
++import pytest
++import time
++
++from cassandra.cluster import ConsistencyLevel
++from cassandra.query import SimpleStatement
++
++from test.pylib.manager_client import ManagerClient
++from test.cluster.util import new_test_keyspace, new_test_table, wait_for_cql_and_get_hosts
++
++logger = logging.getLogger(__name__)
++
++
++@pytest.mark.asyncio
++async def test_filtering_delete_with_paging(manager: ManagerClient):
++    """Filtering delete across many partitions to exercise paging.
++    Uses enough data to force multiple pages (page size is 1000)."""
++    servers = await manager.servers_add(3, auto_rack_dc="dc1")
++    cql, hosts = await manager.get_ready_cql(servers)
++
++    async with new_test_keyspace(manager,
++            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
++        async with new_test_table(manager, ks, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
++            stmts = []
++            for p in range(400):
++                for c in range(10):
++                    stmts.append(f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {c % 3})")
++            await asyncio.gather(*[cql.run_async(s) for s in stmts])
++
++            await cql.run_async(f"DELETE FROM {table} WHERE v = 0 ALLOW FILTERING")
++
++            rows = await cql.run_async(
++                SimpleStatement(f"SELECT count(*) FROM {table}",
++                                consistency_level=ConsistencyLevel.ALL))
++            total_original = 400 * 10
++            deleted = sum(1 for p in range(400) for c in range(10) if c % 3 == 0)
++            assert rows[0].count == total_original - deleted
++
++
++@pytest.mark.asyncio
++async def test_filtering_delete_propagated(manager: ManagerClient):
++    """Writes with ALL and reads from individual nodes to confirm
++    all replicas received the tombstones."""
++    servers = await manager.servers_add(3, auto_rack_dc="dc1")
++    cql, hosts = await manager.get_ready_cql(servers)
++
++    async with new_test_keyspace(manager,
++            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
++        async with new_test_table(manager, ks, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
++            stmts = []
++            for p in range(20):
++                for c in range(5):
++                    stmts.append(SimpleStatement(
++                        f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {c % 3})",
++                        consistency_level=ConsistencyLevel.ALL))
++            await asyncio.gather(*[cql.run_async(s) for s in stmts])
++
++            await cql.run_async(SimpleStatement(
++                f"DELETE FROM {table} WHERE v = 0 ALLOW FILTERING",
++                consistency_level=ConsistencyLevel.ALL))
++
++            expected = sorted([(p, c, c % 3) for p in range(20) for c in range(5) if c % 3 != 0])
++            for host in hosts:
++                rows = await cql.run_async(
++                    SimpleStatement(f"SELECT p, c, v FROM {table}",
++                                    consistency_level=ConsistencyLevel.ONE),
++                    host=host)
++                assert sorted(rows) == expected
++
++
++@pytest.mark.asyncio
++async def test_filtering_delete_concurrent_from_different_nodes(manager: ManagerClient):
++    """Two filtering deletes with different predicates executed concurrently
++    from different coordinator nodes. Both should complete without conflict
++    and all nodes should agree on the final state."""
++    servers = await manager.servers_add(3, auto_rack_dc="dc1")
++    cql, hosts = await manager.get_ready_cql(servers)
++
++    async with new_test_keyspace(manager,
++            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
++        async with new_test_table(manager, ks, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
++            stmts = []
++            for p in range(20):
++                for c in range(4):
++                    stmts.append(SimpleStatement(
++                        f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {c})",
++                        consistency_level=ConsistencyLevel.ALL))
++            await asyncio.gather(*[cql.run_async(s) for s in stmts])
++
++            del1 = cql.run_async(
++                SimpleStatement(f"DELETE FROM {table} WHERE v = 0 ALLOW FILTERING",
++                                consistency_level=ConsistencyLevel.QUORUM),
++                host=hosts[0])
++            del2 = cql.run_async(
++                SimpleStatement(f"DELETE FROM {table} WHERE v = 3 ALLOW FILTERING",
++                                consistency_level=ConsistencyLevel.QUORUM),
++                host=hosts[1])
++            await asyncio.gather(del1, del2)
++
++            expected = sorted([(p, c, c) for p in range(20) for c in range(4)
++                               if c not in (0, 3)])
++            for host in hosts:
++                rows = await cql.run_async(
++                    SimpleStatement(f"SELECT p, c, v FROM {table}",
++                                    consistency_level=ConsistencyLevel.ALL),
++                    host=host)
++                assert sorted(rows) == expected
+diff --git a/test/cqlpy/test_delete_allow_filtering.py b/test/cqlpy/test_delete_allow_filtering.py
+new file mode 100644
+index 0000000000..0bd283bf57
+--- /dev/null
++++ b/test/cqlpy/test_delete_allow_filtering.py
+@@ -0,0 +1,438 @@
++# Copyright 2026-present ScyllaDB
++#
++# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
++
 +# Tests for DELETE ... ALLOW FILTERING
 +#
 +# This feature allows deleting rows matching a WHERE clause that doesn't
 +# fully specify the primary key. The operation fans out to all nodes/shards
 +# in parallel (mapreduce-style), scans data, and writes tombstones.
-+#
-+# Three optimization tiers:
-+#   T1 (partition-only): WHERE clause restricts only partition key columns
-+#       (e.g., DELETE FROM t WHERE p > 5 ALLOW FILTERING)
-+#   T2 (PK + CK): WHERE clause restricts partition and/or clustering columns
-+#       (e.g., DELETE FROM t WHERE c > 3 ALLOW FILTERING)
-+#   T3 (regular columns): WHERE clause includes regular column predicates
-+#       (e.g., DELETE FROM t WHERE v = 10 ALLOW FILTERING)
 +
 +import pytest
 +
-+from cassandra.protocol import InvalidRequest
++from cassandra.protocol import InvalidRequest, SyntaxException
 +
 +from .util import new_test_table
 +
-+
-+# ---------------------------------------------------------------------------
-+# Validation / error tests
-+# ---------------------------------------------------------------------------
++# ----------------------------------------------------------------
++# Not supported syntax
++# ----------------------------------------------------------------
 +
 +def test_delete_allow_filtering_rejects_column_specific(cql, test_keyspace, scylla_only):
 +    """Column-specific deletions (DELETE v FROM ...) are not supported with
@@ -1515,12 +1745,20 @@ index 0000000000..8106959562
 +            cql.execute(f"DELETE FROM {table} WHERE p = 1 IF v = 10 ALLOW FILTERING")
 +
 +
-+# ---------------------------------------------------------------------------
-+# T3: Regular column predicates (read-before-delete)
-+# ---------------------------------------------------------------------------
++def test_delete_allow_filtering_rejects_pk_or_ck(cql, test_keyspace, scylla_only):
++    """OR combining partition key and clustering key is not supported."""
++    with new_test_table(cql, test_keyspace,
++                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
++        with pytest.raises(SyntaxException):
++            cql.execute(f"DELETE FROM {table} WHERE p = 0 OR c = 3 ALLOW FILTERING")
++
++
++# ----------------------------------------------------------------
++# Regular column predicates (read-before-delete)
++# ----------------------------------------------------------------
 +
 +def test_delete_allow_filtering_by_regular_column(cql, test_keyspace, scylla_only):
-+    """T3: Delete rows where a regular column matches a value."""
++    """Delete rows where a regular column matches a value."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
 +        for p in range(3):
@@ -1537,7 +1775,7 @@ index 0000000000..8106959562
 +
 +
 +def test_delete_allow_filtering_by_regular_column_inequality(cql, test_keyspace, scylla_only):
-+    """T3: Delete rows where a regular column satisfies an inequality."""
++    """Delete rows where a regular column satisfies an inequality."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
 +        for p in range(3):
@@ -1553,7 +1791,7 @@ index 0000000000..8106959562
 +
 +
 +def test_delete_allow_filtering_no_matching_rows(cql, test_keyspace, scylla_only):
-+    """T3: Delete with a predicate that matches nothing should be a no-op."""
++    """Delete with a predicate that matches nothing should be a no-op."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
 +        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (1, 1, 10)")
@@ -1566,7 +1804,7 @@ index 0000000000..8106959562
 +
 +
 +def test_delete_allow_filtering_all_rows(cql, test_keyspace, scylla_only):
-+    """T3: Delete all rows by matching a predicate that covers everything."""
++    """Delete all rows by matching a predicate that covers everything."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
 +        for i in range(5):
@@ -1578,12 +1816,12 @@ index 0000000000..8106959562
 +        assert remaining == []
 +
 +
-+# ---------------------------------------------------------------------------
-+# T1: Partition-key-only predicates
-+# ---------------------------------------------------------------------------
++# ----------------------------------------------------------------
++# Partition-key-only predicates
++# ----------------------------------------------------------------
 +
 +def test_delete_allow_filtering_partition_key_range(cql, test_keyspace, scylla_only):
-+    """T1: Delete partitions where partition key satisfies an inequality."""
++    """Delete partitions where partition key satisfies an inequality."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
 +        for p in range(5):
@@ -1599,7 +1837,7 @@ index 0000000000..8106959562
 +
 +
 +def test_delete_allow_filtering_token_range(cql, test_keyspace, scylla_only):
-+    """T1: Delete by token range restriction."""
++    """Delete by token range restriction."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
 +        for p in range(10):
@@ -1623,12 +1861,12 @@ index 0000000000..8106959562
 +            assert token >= 0
 +
 +
-+# ---------------------------------------------------------------------------
-+# T2: Clustering column predicates
-+# ---------------------------------------------------------------------------
++# ----------------------------------------------------------------
++# Clustering column predicates
++# ----------------------------------------------------------------
 +
 +def test_delete_allow_filtering_clustering_range(cql, test_keyspace, scylla_only):
-+    """T2: Delete rows with clustering key range (no regular column predicate)."""
++    """Delete rows with clustering key range (no regular column predicate)."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
 +        for p in range(3):
@@ -1644,7 +1882,7 @@ index 0000000000..8106959562
 +
 +
 +def test_delete_allow_filtering_pk_and_ck_restriction(cql, test_keyspace, scylla_only):
-+    """T2: Delete with both partition key and clustering key restrictions."""
++    """Delete with both partition key and clustering key restrictions."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
 +        for p in range(4):
@@ -1660,12 +1898,12 @@ index 0000000000..8106959562
 +        assert remaining == expected
 +
 +
-+# ---------------------------------------------------------------------------
-+# Mixed tier: partition key + clustering key + regular column
-+# ---------------------------------------------------------------------------
++# ----------------------------------------------------------------
++# Mixed predicates: partition key + clustering key + regular column
++# ----------------------------------------------------------------
 +
 +def test_delete_allow_filtering_mixed_predicates(cql, test_keyspace, scylla_only):
-+    """T3 (mixed): Delete with partition key, clustering key, and regular
++    """Delete with partition key, clustering key, and regular
 +    column restrictions combined."""
 +    with new_test_table(cql, test_keyspace,
 +                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
@@ -1683,9 +1921,9 @@ index 0000000000..8106959562
 +        assert remaining == expected
 +
 +
-+# ---------------------------------------------------------------------------
++# ----------------------------------------------------------------
 +# Edge cases
-+# ---------------------------------------------------------------------------
++# ----------------------------------------------------------------
 +
 +def test_delete_allow_filtering_empty_table(cql, test_keyspace, scylla_only):
 +    """Delete from an empty table should succeed without error."""
@@ -1788,3 +2026,146 @@ index 0000000000..8106959562
 +
 +        remaining = sorted(cql.execute(f"SELECT p, c, v FROM {table}"))
 +        assert remaining == [(2, 2, 20)]
++
++
++def test_delete_allow_filtering_partition_key_and_regular(cql, test_keyspace, scylla_only):
++    """Delete with both partition key and regular column restrictions."""
++    with new_test_table(cql, test_keyspace,
++                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
++        for p in range(3):
++            for c in range(3):
++                cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {c * 10})")
++
++        # Delete rows where p >= 1 and v = 20
++        cql.execute(f"DELETE FROM {table} WHERE p >= 1 AND v = 20 ALLOW FILTERING")
++
++        remaining = sorted(cql.execute(f"SELECT p, c, v FROM {table}"))
++        expected = sorted([(p, c, c * 10) for p in range(3) for c in range(3)
++                           if not (p >= 1 and c * 10 == 20)])
++        assert remaining == expected
++
++
++def test_delete_allow_filtering_static_column(cql, test_keyspace, scylla_only):
++    with new_test_table(cql, test_keyspace,
++                        "p int, c int, s int static, v int, PRIMARY KEY (p, c)") as table:
++        for p in range(5):
++            cql.execute(f"INSERT INTO {table} (p, s) VALUES ({p}, {p * 10})")
++            for c in range(3):
++                cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {c})")
++
++        cql.execute(f"DELETE FROM {table} WHERE s = 20 ALLOW FILTERING")
++
++        rows = list(cql.execute(f"SELECT p, c, s, v FROM {table} WHERE p = 2"))
++        assert len(rows) == 0
++
++        for p in range(5):
++            if p == 2:
++                continue
++            rows = list(cql.execute(f"SELECT p, c, s, v FROM {table} WHERE p = {p}"))
++            assert len(rows) == 3
++
++
++def test_delete_allow_filtering_static_and_regular_column(cql, test_keyspace, scylla_only):
++    with new_test_table(cql, test_keyspace,
++                        "p int, c int, s int static, v int, PRIMARY KEY (p, c)") as table:
++        for p in range(5):
++            cql.execute(f"INSERT INTO {table} (p, s) VALUES ({p}, {p * 10})")
++            for c in range(3):
++                cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {c})")
++
++        cql.execute(f"DELETE FROM {table} WHERE s = 20 AND v IN (0, 1, 2) ALLOW FILTERING")
++
++        rows = list(cql.execute(f"SELECT p, c, s, v FROM {table} WHERE p = 2"))
++        assert len(rows) == 1
++        assert rows[0].c is None and rows[0].v is None
++        assert rows[0].s == 20
++
++        for p in range(5):
++            if p == 2:
++                continue
++            rows = list(cql.execute(f"SELECT p, c, s, v FROM {table} WHERE p = {p}"))
++            assert len(rows) == 3
++
++
++# ----------------------------------------------------------------
++# IN predicates
++# ----------------------------------------------------------------
++
++def test_delete_allow_filtering_pk_in(cql, test_keyspace, scylla_only):
++    """Delete rows where partition key is IN a set of values."""
++    with new_test_table(cql, test_keyspace,
++                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
++        for p in range(5):
++            for c in range(3):
++                cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {p})")
++
++        cql.execute(f"DELETE FROM {table} WHERE p IN (1, 3) ALLOW FILTERING")
++
++        remaining = sorted(cql.execute(f"SELECT p, c, v FROM {table}"))
++        expected = sorted([(p, c, p) for p in range(5) for c in range(3)
++                           if p not in (1, 3)])
++        assert remaining == expected
++
++
++def test_delete_allow_filtering_ck_in(cql, test_keyspace, scylla_only):
++    """Delete rows where clustering key is IN a set of values."""
++    with new_test_table(cql, test_keyspace,
++                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
++        for p in range(3):
++            for c in range(5):
++                cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {c})")
++
++        cql.execute(f"DELETE FROM {table} WHERE c IN (0, 2, 4) ALLOW FILTERING")
++
++        remaining = sorted(cql.execute(f"SELECT p, c, v FROM {table}"))
++        expected = sorted([(p, c, c) for p in range(3) for c in range(5)
++                           if c not in (0, 2, 4)])
++        assert remaining == expected
++
++
++def test_delete_allow_filtering_regular_in(cql, test_keyspace, scylla_only):
++    """Delete rows where a regular column is IN a set of values."""
++    with new_test_table(cql, test_keyspace,
++                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
++        for p in range(3):
++            for c in range(4):
++                cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p}, {c}, {c})")
++
++        cql.execute(f"DELETE FROM {table} WHERE v IN (1, 3) ALLOW FILTERING")
++
++        remaining = sorted(cql.execute(f"SELECT p, c, v FROM {table}"))
++        expected = sorted([(p, c, c) for p in range(3) for c in range(4)
++                           if c not in (1, 3)])
++        assert remaining == expected
++
+diff --git a/types/types.cc b/types/types.cc
+index 31f01a9e1f..3442cc5375 100644
+--- a/types/types.cc
++++ b/types/types.cc
+@@ -3965,7 +3965,7 @@ sstring data_value::to_parsable_string() const {
+             if (i != 0) {
+                 result << ", ";
+             }
+-            result << user_typ->string_field_names().at(i) << ":" << (*field_values)[i].to_parsable_string();
++            result << cql3::util::maybe_quote(user_typ->string_field_names().at(i)) << ":" << (*field_values)[i].to_parsable_string();
+         }
+         result << "}";
+         return std::move(result).str();
+@@ -4009,8 +4009,15 @@ sstring data_value::to_parsable_string() const {
+         || type_kind == abstract_type::kind::date
+         || type_kind == abstract_type::kind::timestamp
+     ) {
+-        // Put quotes on types that require it
+-        return fmt::format("'{}'", *this);
++        // Put quotes on types that require it.
++        // Use single_quote() to properly escape embedded single quotes
++        // (e.g. "it's" becomes "'it''s'").
++        return cql3::util::single_quote(fmt::format("{}", *this));
++    }
++
++    if (type_kind == abstract_type::kind::bytes) {
++        // Blob literals in CQL require a 0x prefix (e.g. 0xdeadbeef)
++        return fmt::format("0x{}", *this);
+     }
+ 
+     // For simple types the default operator<< should work ok

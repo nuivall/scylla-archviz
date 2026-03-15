@@ -1,70 +1,689 @@
 {
-  "commit": "c13580f38e",
-  "title": "DELETE ... ALLOW FILTERING (filtering delete)",
-  "summary": "Adds support for DELETE statements with ALLOW FILTERING, enabling deletion of rows matching arbitrary WHERE clauses without requiring the full primary key. The operation fans out to all nodes/shards in parallel (mapreduce-style), scans data, evaluates predicates, and writes tombstones. Three optimization tiers: T1 (partition-only predicates, partition tombstones), T2 (clustering key predicates, range tombstones), T3 (regular column predicates, per-row read-before-delete).",
-  "nodes": {
-    "query_processor": {
-      "summary": "New entry point added for filtering deletes. The query processor accepts the delete request and delegates execution to the mapreduce service for distributed processing. This is the CQL layer's gateway into the distributed filtering delete infrastructure.",
-      "files": ["cql3/query_processor.cc", "cql3/query_processor.hh"],
-      "linesAdded": 10,
-      "linesRemoved": 0
+  "commit": "60137e2964",
+  "title": "Add DELETE with ALLOW FILTERING (mapreduce-style distributed delete)",
+  "summary": "Introduces a new distributed delete operation that allows deleting rows matching arbitrary WHERE clause predicates without requiring a fully specified primary key. The statement is parsed and prepared in the CQL layer, then dispatched to all shards in parallel through the existing mapreduce service infrastructure, with support for both vnode and tablet topologies. An optimization tier system selects the most efficient tombstone strategy based on predicate shape, ranging from partition-level tombstones to per-row read-before-delete. Supporting changes include a new RPC verb, a cluster feature flag, expression serialization for bind variable inlining, and fixes to CQL literal formatting for text escaping and blob prefixes.",
+  "levels": {
+    "peering_service": {
+      "nodes": {
+        "mapreduce_service": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "The mapreduce coordination service gains a complete parallel execution pipeline for distributed delete operations. New dispatch methods split delete requests across cluster nodes using both vnode-based and tablet-aware routing strategies. Each shard independently scans its local data, evaluates filtering predicates via a re-prepared select statement, and applies the appropriate tombstone strategy. A new retry dispatcher and tablet algorithm handle node failures and topology changes during execution.",
+          "files": [
+            "service/mapreduce_service.cc",
+            "service/mapreduce_service.hh"
+          ],
+          "linesAdded": 565,
+          "linesRemoved": 1,
+          "classes": [
+            "mapreduce_service",
+            "filtering_delete_retrying_dispatcher",
+            "filtering_delete_tablet_algorithm"
+          ]
+        },
+        "query_processor": {
+          "ns": "cql3",
+          "layer": "query",
+          "summary": "The query processing service adds a new entry point for dispatching filtering delete requests to the mapreduce infrastructure. It also registers a new metrics counter to track the total number of filtered delete operations. These changes bridge the CQL statement layer and the distributed execution layer.",
+          "files": [
+            "cql3/query_processor.cc",
+            "cql3/query_processor.hh"
+          ],
+          "linesAdded": 15,
+          "linesRemoved": 0,
+          "classes": [
+            "query_processor",
+            "cql_stats"
+          ]
+        },
+        "messaging_service": {
+          "ns": "netw",
+          "layer": "cluster",
+          "summary": "The inter-node messaging service registers a new RPC verb to carry filtering delete requests between nodes. The verb is assigned to the same connection pool as the existing mapreduce verb, sharing its resource allocation and backpressure characteristics.",
+          "files": [
+            "message/messaging_service.cc",
+            "message/messaging_service.hh"
+          ],
+          "linesAdded": 5,
+          "linesRemoved": 1,
+          "classes": [
+            "messaging_service"
+          ]
+        },
+        "feature_service": {
+          "ns": "gms",
+          "layer": "cluster",
+          "summary": "A new cluster-wide feature flag is added to gate the filtering delete capability. The flag ensures that all nodes in the cluster support the new operation before any node attempts to use it, preventing incompatible RPC traffic during rolling upgrades.",
+          "files": [
+            "gms/feature_service.hh"
+          ],
+          "linesAdded": 1,
+          "linesRemoved": 0,
+          "classes": [
+            "feature_service"
+          ]
+        }
+      },
+      "edges": {
+        "query_processor->mapreduce_service": {
+          "summary": "The query processor delegates filtering delete requests to the mapreduce service for parallel execution across all cluster nodes and shards."
+        },
+        "mapreduce_service->messaging_service": {
+          "summary": "The mapreduce service uses the messaging layer to dispatch filtering delete requests to remote nodes via a dedicated RPC verb."
+        },
+        "mapreduce_service->query_processor": {
+          "summary": "The shard-local delete executor re-parses the serialized WHERE clause through the query preparation pipeline to reconstruct filtering restrictions and partition slices."
+        }
+      }
     },
-    "mapreduce_service": {
-      "summary": "Major extension: ~470 lines of new code implementing the distributed filtering delete execution engine. Supports both vnode-based and tablet-based table topologies, splitting partition ranges across cluster nodes and dispatching work in parallel. Each shard scans local data, evaluates predicates, builds tombstone mutations at the appropriate optimization tier (partition, range, or row), and writes them through the storage proxy. Includes a new RPC verb handler and a retrying dispatcher for fault-tolerant remote execution with automatic fallback to local processing on failure.",
-      "files": ["service/mapreduce_service.cc", "service/mapreduce_service.hh"],
-      "linesAdded": 491,
-      "linesRemoved": 2
+    "class": {
+      "nodes": {
+        "filtering_delete_statement": {
+          "ns": "cql3::statements",
+          "layer": "query",
+          "summary": "A new statement type that handles DELETE with ALLOW FILTERING. It classifies the predicate into an optimization tier to select the most efficient tombstone strategy, then serializes the WHERE clause with inlined bind variables and dispatches it to the distributed execution layer. The statement validates feature flag support and rejects unsupported consistency levels before execution.",
+          "files": [
+            "cql3/statements/filtering_delete_statement.cc",
+            "cql3/statements/filtering_delete_statement.hh"
+          ],
+          "linesAdded": 192,
+          "linesRemoved": 0,
+          "peering_service": null,
+          "functions": [
+            "filtering_delete_statement::filtering_delete_statement",
+            "filtering_delete_statement::classify",
+            "filtering_delete_statement::execute_without_checking_exception_message",
+            "filtering_delete_statement::do_execute"
+          ]
+        },
+        "delete_statement": {
+          "ns": "cql3::statements",
+          "layer": "query",
+          "summary": "The existing delete statement class is refactored to detect the ALLOW FILTERING flag during preparation and route to the new filtering delete statement type. The preparation logic is split into a separate method to allow early branching before condition and restriction processing.",
+          "files": [
+            "cql3/statements/delete_statement.cc"
+          ],
+          "linesAdded": 35,
+          "linesRemoved": 4,
+          "peering_service": null,
+          "functions": [
+            "delete_statement::prepare_statement",
+            "delete_statement::prepare_internal"
+          ]
+        },
+        "modification_statement": {
+          "ns": "cql3::statements",
+          "layer": "query",
+          "summary": "The base modification statement class relaxes several validation checks when allow_filtering is enabled. Token-based restrictions, non-primary-key column restrictions, and incomplete partition key specifications are now permitted, allowing the filtering delete to operate with arbitrary WHERE clause predicates.",
+          "files": [
+            "cql3/statements/modification_statement.cc",
+            "cql3/statements/modification_statement.hh"
+          ],
+          "linesAdded": 9,
+          "linesRemoved": 7,
+          "peering_service": null,
+          "functions": [
+            "modification_statement::process_where_clause"
+          ]
+        },
+        "raw_delete_statement": {
+          "ns": "cql3::statements::raw",
+          "layer": "query",
+          "summary": "The raw delete statement parser representation gains an allow_filtering flag and accessor methods. The constructor signature is extended to carry the flag from the grammar, and a new preparation method is factored out to enable early routing to the filtering delete statement.",
+          "files": [
+            "cql3/statements/raw/delete_statement.hh"
+          ],
+          "linesAdded": 9,
+          "linesRemoved": 1,
+          "peering_service": null,
+          "functions": []
+        },
+        "raw_modification_statement": {
+          "ns": "cql3::statements::raw",
+          "layer": "query",
+          "summary": "A minor visibility adjustment in the raw modification statement base class changes the access level of condition-related fields to allow derived classes to inspect them during preparation.",
+          "files": [
+            "cql3/statements/raw/modification_statement.hh"
+          ],
+          "linesAdded": 0,
+          "linesRemoved": 1,
+          "peering_service": null,
+          "functions": []
+        },
+        "statement_restrictions": {
+          "ns": "cql3::restrictions",
+          "layer": "query",
+          "summary": "A new accessor is added to expose the full WHERE clause expression tree. This enables the filtering delete statement to retrieve the complete set of restrictions for serialization and transmission to remote nodes.",
+          "files": [
+            "cql3/restrictions/statement_restrictions.hh"
+          ],
+          "linesAdded": 6,
+          "linesRemoved": 0,
+          "peering_service": null,
+          "functions": [
+            "statement_restrictions::where"
+          ]
+        },
+        "query_processor": {
+          "ns": "cql3",
+          "layer": "query",
+          "summary": "The query processor class adds a new method for dispatching filtering delete requests and a new metrics counter for tracking filtered delete operations. The method delegates to the mapreduce service's delete dispatch infrastructure.",
+          "files": [
+            "cql3/query_processor.cc",
+            "cql3/query_processor.hh"
+          ],
+          "linesAdded": 15,
+          "linesRemoved": 0,
+          "peering_service": "query_processor",
+          "functions": [
+            "query_processor::filtering_delete"
+          ]
+        },
+        "cql_stats": {
+          "ns": "cql3",
+          "layer": "query",
+          "summary": "A new counter field is added to the CQL statistics structure to track the number of filtered delete operations, complementing the existing filtered reads counter.",
+          "files": [
+            "cql3/stats.hh"
+          ],
+          "linesAdded": 1,
+          "linesRemoved": 0,
+          "peering_service": "query_processor",
+          "functions": []
+        },
+        "mapreduce_service": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "The mapreduce service class gains a full set of methods for distributed delete execution: a top-level dispatch entry point, vnode and tablet routing strategies, per-shard execution with paging and filtering, and a retry dispatcher for fault tolerance. The shard-local executor re-parses the WHERE clause, builds a paged scan, evaluates filtering predicates, and writes tombstones at the appropriate granularity based on the optimization tier.",
+          "files": [
+            "service/mapreduce_service.cc",
+            "service/mapreduce_service.hh"
+          ],
+          "linesAdded": 565,
+          "linesRemoved": 1,
+          "peering_service": "mapreduce_service",
+          "functions": [
+            "mapreduce_service::init_messaging_service",
+            "mapreduce_service::uninit_messaging_service",
+            "mapreduce_service::dispatch_delete_to_shards",
+            "mapreduce_service::execute_delete_on_this_shard",
+            "mapreduce_service::dispatch_delete_range_and_reduce",
+            "mapreduce_service::dispatch_delete_to_vnodes",
+            "mapreduce_service::dispatch_delete_to_tablets",
+            "mapreduce_service::dispatch_delete"
+          ]
+        },
+        "filtering_delete_retrying_dispatcher": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "A new helper class that handles dispatching filtering delete requests to individual cluster nodes with automatic retry on connection failures. When a remote dispatch fails, the request is retried locally on the coordinator node to ensure forward progress.",
+          "files": [
+            "service/mapreduce_service.cc"
+          ],
+          "linesAdded": 48,
+          "linesRemoved": 0,
+          "peering_service": "mapreduce_service",
+          "functions": [
+            "filtering_delete_retrying_dispatcher::filtering_delete_retrying_dispatcher",
+            "filtering_delete_retrying_dispatcher::dispatch_to_node"
+          ]
+        },
+        "filtering_delete_tablet_algorithm": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "A new class implementing tablet-aware dispatch for filtering delete operations. It splits partition ranges across tablet replicas, respects datacenter locality, handles topology version changes during execution, and parallelizes work across replicas with a configurable concurrency limit.",
+          "files": [
+            "service/mapreduce_service.cc"
+          ],
+          "linesAdded": 130,
+          "linesRemoved": 0,
+          "peering_service": "mapreduce_service",
+          "functions": [
+            "filtering_delete_tablet_algorithm::filtering_delete_tablet_algorithm",
+            "filtering_delete_tablet_algorithm::initialize_ranges_left",
+            "filtering_delete_tablet_algorithm::prepare_ranges_per_replica",
+            "filtering_delete_tablet_algorithm::get_processing_slots",
+            "filtering_delete_tablet_algorithm::dispatch_work_and_wait_to_finish"
+          ]
+        },
+        "filtering_delete_request": {
+          "ns": "query",
+          "layer": "query",
+          "summary": "A new request structure that encapsulates all parameters needed for distributed filtering delete execution. It carries the table identity, serialized WHERE clause, partition ranges, consistency level, tombstone timestamp, and an optimization tier that determines the deletion strategy.",
+          "files": [
+            "query/query-request.hh",
+            "query/query.cc"
+          ],
+          "linesAdded": 58,
+          "linesRemoved": 0,
+          "peering_service": null,
+          "functions": []
+        },
+        "filtering_delete_result": {
+          "ns": "query",
+          "layer": "query",
+          "summary": "A new result structure that carries the outcome of a distributed filtering delete operation, specifically the count of rows deleted across all participating shards and nodes.",
+          "files": [
+            "query/query-request.hh",
+            "query/query.cc"
+          ],
+          "linesAdded": 7,
+          "linesRemoved": 0,
+          "peering_service": null,
+          "functions": []
+        },
+        "messaging_service": {
+          "ns": "netw",
+          "layer": "cluster",
+          "summary": "The messaging service gains a new RPC verb for carrying filtering delete requests between cluster nodes. The verb is routed to the same connection pool as the existing mapreduce verb.",
+          "files": [
+            "message/messaging_service.cc",
+            "message/messaging_service.hh"
+          ],
+          "linesAdded": 5,
+          "linesRemoved": 1,
+          "peering_service": "messaging_service",
+          "functions": []
+        },
+        "feature_service": {
+          "ns": "gms",
+          "layer": "cluster",
+          "summary": "A new cluster feature flag is registered to gate the filtering delete capability during rolling upgrades. The flag must be active on all nodes before the feature can be used.",
+          "files": [
+            "gms/feature_service.hh"
+          ],
+          "linesAdded": 1,
+          "linesRemoved": 0,
+          "peering_service": "feature_service",
+          "functions": []
+        },
+        "data_value": {
+          "ns": "",
+          "layer": "storage",
+          "summary": "The value formatting infrastructure is updated to properly escape single quotes in text and ASCII literals and to add the required hex prefix for blob literals. These fixes ensure that serialized CQL expressions can survive round-trip parsing, which is critical for the filtering delete's WHERE clause transmission.",
+          "files": [
+            "types/types.cc"
+          ],
+          "linesAdded": 10,
+          "linesRemoved": 3,
+          "peering_service": null,
+          "functions": [
+            "data_value::to_parsable_string"
+          ]
+        },
+        "expression": {
+          "ns": "cql3::expr",
+          "layer": "query",
+          "summary": "The expression module gains a new utility function for replacing bind variable placeholders with their concrete values from query options. The expression printer is also updated to properly escape single quotes in string constants, ensuring correct round-trip serialization.",
+          "files": [
+            "cql3/expr/expr-utils.hh",
+            "cql3/expr/expression.cc"
+          ],
+          "linesAdded": 28,
+          "linesRemoved": 1,
+          "peering_service": null,
+          "functions": [
+            "expression::inline_bind_variables"
+          ]
+        }
+      },
+      "edges": {
+        "filtering_delete_statement->query_processor": {
+          "summary": "The filtering delete statement delegates distributed execution to the query processor, which bridges to the mapreduce infrastructure."
+        },
+        "filtering_delete_statement->statement_restrictions": {
+          "summary": "The filtering delete statement reads the restriction set to classify the predicate tier and extract the WHERE clause for serialization."
+        },
+        "filtering_delete_statement->expression": {
+          "summary": "The filtering delete statement uses the expression utility to inline bind variables into the WHERE clause before serializing it for remote transmission."
+        },
+        "filtering_delete_statement->feature_service": {
+          "summary": "The filtering delete statement checks the cluster feature flag before execution to ensure all nodes support the new operation."
+        },
+        "filtering_delete_statement->filtering_delete_request": {
+          "summary": "The filtering delete statement constructs the request structure that encapsulates all parameters for distributed execution."
+        },
+        "delete_statement->filtering_delete_statement": {
+          "summary": "The delete statement preparation logic routes to the filtering delete statement type when the ALLOW FILTERING flag is present."
+        },
+        "delete_statement->modification_statement": {
+          "summary": "The delete statement delegates WHERE clause processing to the base modification statement with the allow_filtering flag."
+        },
+        "query_processor->mapreduce_service": {
+          "summary": "The query processor forwards filtering delete requests to the mapreduce service for parallel cluster-wide execution."
+        },
+        "mapreduce_service->messaging_service": {
+          "summary": "The mapreduce service sends filtering delete requests to remote nodes through the messaging layer's new RPC verb."
+        },
+        "filtering_delete_retrying_dispatcher->mapreduce_service": {
+          "summary": "The retry dispatcher invokes the mapreduce service's local shard dispatch as a fallback when remote communication fails."
+        },
+        "filtering_delete_tablet_algorithm->filtering_delete_retrying_dispatcher": {
+          "summary": "The tablet algorithm uses the retry dispatcher to send delete requests to individual tablet replicas with fault tolerance."
+        },
+        "mapreduce_service->filtering_delete_retrying_dispatcher": {
+          "summary": "The mapreduce service's vnode dispatch path creates retry dispatchers to send delete requests to endpoint nodes."
+        },
+        "mapreduce_service->filtering_delete_tablet_algorithm": {
+          "summary": "The mapreduce service delegates tablet-based routing to the tablet algorithm when the target table uses tablet storage."
+        }
+      }
     },
-    "messaging_service": {
-      "summary": "New RPC verb added for filtering delete requests. The verb shares the same connection pool as the existing mapreduce request verb. Includes serialization/deserialization support for the new request and result types.",
-      "files": ["message/messaging_service.cc", "message/messaging_service.hh"],
-      "linesAdded": 6,
-      "linesRemoved": 2
-    },
-    "feature_service": {
-      "summary": "New cluster feature flag added to gate the filtering delete feature. The flag ensures that DELETE ... ALLOW FILTERING is rejected during rolling upgrades until all nodes in the cluster support it.",
-      "files": ["gms/feature_service.hh"],
-      "linesAdded": 1,
-      "linesRemoved": 0
-    }
-  },
-  "edges": {
-    "query_processor->mapreduce_service": {
-      "summary": "Delegates filtering delete requests to the mapreduce service for distributed execution across the cluster."
-    },
-    "mapreduce_service->messaging_service": {
-      "summary": "Dispatches filtering delete work to remote nodes via a new RPC verb, with retry logic and automatic fallback to local execution."
-    },
-    "mapreduce_service->storage_proxy": {
-      "summary": "Writes tombstone mutations for rows matching the filtering delete predicates, and reads query size limits and tombstone thresholds."
-    },
-    "mapreduce_service->database": {
-      "summary": "Looks up the table's topology type (vnodes vs tablets) and accesses schema and partition range metadata for routing delete operations."
+    "function": {
+      "nodes": {
+        "filtering_delete_statement::filtering_delete_statement": {
+          "ns": "cql3::statements",
+          "layer": "query",
+          "summary": "Constructor that initializes the filtering delete statement by delegating to the base delete statement constructor. It establishes the statement's association with the target schema and CQL statistics.",
+          "file": "cql3/statements/filtering_delete_statement.cc",
+          "linesAdded": 9,
+          "linesRemoved": 0,
+          "class": "filtering_delete_statement"
+        },
+        "filtering_delete_statement::classify": {
+          "ns": "cql3::statements",
+          "layer": "query",
+          "summary": "Analyzes the statement's restrictions to determine the most efficient tombstone strategy. It inspects whether predicates touch regular columns, clustering columns, or only partition keys, and returns the corresponding optimization tier.",
+          "file": "cql3/statements/filtering_delete_statement.cc",
+          "linesAdded": 16,
+          "linesRemoved": 0,
+          "class": "filtering_delete_statement"
+        },
+        "filtering_delete_statement::execute_without_checking_exception_message": {
+          "ns": "cql3::statements",
+          "layer": "query",
+          "summary": "Entry point for statement execution that validates the cluster feature flag before delegating to the actual execution method. It ensures all nodes in the cluster support the filtering delete operation.",
+          "file": "cql3/statements/filtering_delete_statement.cc",
+          "linesAdded": 13,
+          "linesRemoved": 0,
+          "class": "filtering_delete_statement"
+        },
+        "filtering_delete_statement::do_execute": {
+          "ns": "cql3::statements",
+          "layer": "query",
+          "summary": "Core execution logic that validates consistency level, inlines bind variables into the WHERE expression, computes partition key ranges, constructs the distributed delete request, and dispatches it through the query processor. It translates the local optimization tier to the RPC-transportable enum and traces the operation.",
+          "file": "cql3/statements/filtering_delete_statement.cc",
+          "linesAdded": 62,
+          "linesRemoved": 0,
+          "class": "filtering_delete_statement"
+        },
+        "delete_statement::prepare_statement": {
+          "ns": "cql3::statements::raw",
+          "layer": "query",
+          "summary": "A new preparation method factored out of the original prepare_internal. It handles ALLOW FILTERING validation and routing to the filtering delete statement type, including rejection of column-specific deletions and conditional operations.",
+          "file": "cql3/statements/delete_statement.cc",
+          "linesAdded": 25,
+          "linesRemoved": 0,
+          "class": "delete_statement"
+        },
+        "delete_statement::prepare_internal": {
+          "ns": "cql3::statements::raw",
+          "layer": "query",
+          "summary": "The existing preparation method is updated to delegate to the new factored-out preparation step and to pass the allow_filtering flag through to WHERE clause processing.",
+          "file": "cql3/statements/delete_statement.cc",
+          "linesAdded": 6,
+          "linesRemoved": 4,
+          "class": "delete_statement"
+        },
+        "modification_statement::process_where_clause": {
+          "ns": "cql3::statements",
+          "layer": "query",
+          "summary": "The WHERE clause processing method is updated to accept an allow_filtering parameter. When enabled, it relaxes validation to permit token-based restrictions, non-primary-key column restrictions, and incomplete partition key specifications.",
+          "file": "cql3/statements/modification_statement.cc",
+          "linesAdded": 8,
+          "linesRemoved": 6,
+          "class": "modification_statement"
+        },
+        "statement_restrictions::where": {
+          "ns": "cql3::restrictions",
+          "layer": "query",
+          "summary": "A new accessor that exposes the complete WHERE clause expression tree stored in the restrictions object. This is used by the filtering delete statement to retrieve and serialize the expression for remote transmission.",
+          "file": "cql3/restrictions/statement_restrictions.hh",
+          "linesAdded": 6,
+          "linesRemoved": 0,
+          "class": "statement_restrictions"
+        },
+        "query_processor::filtering_delete": {
+          "ns": "cql3",
+          "layer": "query",
+          "summary": "A new dispatch method that forwards filtering delete requests to the mapreduce service. It follows the same remote-service pattern as the existing mapreduce dispatch method.",
+          "file": "cql3/query_processor.cc",
+          "linesAdded": 6,
+          "linesRemoved": 0,
+          "class": "query_processor"
+        },
+        "expression::inline_bind_variables": {
+          "ns": "cql3::expr",
+          "layer": "query",
+          "summary": "A new utility function that traverses an expression tree and replaces all bind variable placeholders with constant values from the query options. This makes the expression self-contained for serialization and transmission to remote nodes where the original bind context is not available.",
+          "file": "cql3/expr/expression.cc",
+          "linesAdded": 17,
+          "linesRemoved": 0,
+          "class": "expression"
+        },
+        "mapreduce_service::init_messaging_service": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Updated to register the new filtering delete RPC verb handler alongside the existing mapreduce verb, routing incoming requests to the shard-level dispatch method.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 7,
+          "linesRemoved": 0,
+          "class": "mapreduce_service"
+        },
+        "mapreduce_service::uninit_messaging_service": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Updated to unregister the filtering delete RPC verb alongside the existing mapreduce verb during service shutdown.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 3,
+          "linesRemoved": 1,
+          "class": "mapreduce_service"
+        },
+        "mapreduce_service::dispatch_delete": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Top-level entry point for distributed delete execution. It resolves the schema, determines whether the table uses tablets or vnodes, and delegates to the appropriate routing strategy.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 19,
+          "linesRemoved": 0,
+          "class": "mapreduce_service"
+        },
+        "mapreduce_service::dispatch_delete_to_shards": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Distributes a filtering delete request across all local CPU shards in parallel and aggregates the per-shard deletion counts into a combined result.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 20,
+          "linesRemoved": 0,
+          "class": "mapreduce_service"
+        },
+        "mapreduce_service::execute_delete_on_this_shard": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "The shard-local delete executor that performs the actual data scanning and tombstone generation. It re-parses the WHERE clause into a select statement, builds a paged scan with filtering, iterates over matching rows, and writes tombstones at the appropriate granularity based on the optimization tier. For partition-only and clustering-prefix tiers, it collects unique partition keys for bulk tombstone application.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 170,
+          "linesRemoved": 0,
+          "class": "mapreduce_service"
+        },
+        "mapreduce_service::dispatch_delete_range_and_reduce": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Sends a filtering delete request for a specific set of partition ranges to a target node and merges the returned deletion count into the shared result accumulator.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 20,
+          "linesRemoved": 0,
+          "class": "mapreduce_service"
+        },
+        "mapreduce_service::dispatch_delete_to_vnodes": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Implements vnode-based routing for filtering delete by splitting partition ranges across endpoints, selecting the first live replica for each range, and dispatching requests in parallel to all endpoints.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 34,
+          "linesRemoved": 0,
+          "class": "mapreduce_service"
+        },
+        "mapreduce_service::dispatch_delete_to_tablets": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Delegates tablet-based routing to the tablet algorithm helper class, which handles range splitting, replica selection, and parallel dispatch with topology change resilience.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 10,
+          "linesRemoved": 0,
+          "class": "mapreduce_service"
+        },
+        "filtering_delete_retrying_dispatcher::filtering_delete_retrying_dispatcher": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Constructor that initializes the retry dispatcher with a reference to the mapreduce service and trace state for request propagation.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 5,
+          "linesRemoved": 0,
+          "class": "filtering_delete_retrying_dispatcher"
+        },
+        "filtering_delete_retrying_dispatcher::dispatch_to_node": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Sends a filtering delete request to a specific node, with automatic fallback to local execution if the remote dispatch fails due to a connection error. It checks whether the target is the local node to avoid unnecessary network round-trips.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 25,
+          "linesRemoved": 0,
+          "class": "filtering_delete_retrying_dispatcher"
+        },
+        "filtering_delete_tablet_algorithm::filtering_delete_tablet_algorithm": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Constructor that initializes the tablet algorithm with references to the service infrastructure, request parameters, and a per-replica concurrency limit.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 12,
+          "linesRemoved": 0,
+          "class": "filtering_delete_tablet_algorithm"
+        },
+        "filtering_delete_tablet_algorithm::initialize_ranges_left": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Splits the original partition ranges into tablet-aligned ranges and populates the work queue for subsequent dispatch.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 10,
+          "linesRemoved": 0,
+          "class": "filtering_delete_tablet_algorithm"
+        },
+        "filtering_delete_tablet_algorithm::prepare_ranges_per_replica": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Maps each pending partition range to its tablet replicas, filtering for liveness and datacenter locality. This establishes the dispatch plan for the current topology version.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 25,
+          "linesRemoved": 0,
+          "class": "filtering_delete_tablet_algorithm"
+        },
+        "filtering_delete_tablet_algorithm::get_processing_slots": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Generates a list of processing slots by duplicating each replica up to the concurrency limit, controlling the degree of parallelism per replica.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 10,
+          "linesRemoved": 0,
+          "class": "filtering_delete_tablet_algorithm"
+        },
+        "filtering_delete_tablet_algorithm::dispatch_work_and_wait_to_finish": {
+          "ns": "service",
+          "layer": "services",
+          "summary": "Executes the dispatch loop that processes all pending ranges. It re-prepares the replica mapping on each iteration to handle topology changes, dispatches requests in parallel across replicas, and terminates when all ranges have been processed.",
+          "file": "service/mapreduce_service.cc",
+          "linesAdded": 26,
+          "linesRemoved": 0,
+          "class": "filtering_delete_tablet_algorithm"
+        },
+        "data_value::to_parsable_string": {
+          "ns": "",
+          "layer": "storage",
+          "summary": "Updated to properly escape single quotes in text and ASCII values and to prefix blob values with the required hex marker. These fixes ensure that serialized CQL literals are valid for re-parsing.",
+          "file": "types/types.cc",
+          "linesAdded": 10,
+          "linesRemoved": 3,
+          "class": "data_value"
+        }
+      },
+      "edges": {
+        "filtering_delete_statement::do_execute->query_processor::filtering_delete": {
+          "summary": "The statement's core execution logic dispatches the constructed request to the query processor for forwarding to the distributed execution layer."
+        },
+        "filtering_delete_statement::do_execute->expression::inline_bind_variables": {
+          "summary": "The execution logic inlines bind variable values into the WHERE expression to produce a self-contained expression for remote serialization."
+        },
+        "filtering_delete_statement::do_execute->filtering_delete_statement::classify": {
+          "summary": "The execution logic calls the classifier to determine the optimization tier before constructing the distributed request."
+        },
+        "filtering_delete_statement::execute_without_checking_exception_message->filtering_delete_statement::do_execute": {
+          "summary": "The entry point delegates to the core execution method after validating the cluster feature flag."
+        },
+        "delete_statement::prepare_internal->delete_statement::prepare_statement": {
+          "summary": "The existing preparation method delegates to the new factored-out step for statement construction and early routing."
+        },
+        "delete_statement::prepare_statement->modification_statement::process_where_clause": {
+          "summary": "The preparation method delegates WHERE clause processing to the base class with the allow_filtering flag."
+        },
+        "query_processor::filtering_delete->mapreduce_service::dispatch_delete": {
+          "summary": "The query processor forwards the delete request to the mapreduce service's top-level dispatch entry point."
+        },
+        "mapreduce_service::dispatch_delete->mapreduce_service::dispatch_delete_to_vnodes": {
+          "summary": "The top-level dispatch selects vnode-based routing when the table does not use tablets."
+        },
+        "mapreduce_service::dispatch_delete->mapreduce_service::dispatch_delete_to_tablets": {
+          "summary": "The top-level dispatch selects tablet-based routing when the table uses tablet storage."
+        },
+        "mapreduce_service::dispatch_delete_to_vnodes->mapreduce_service::dispatch_delete_range_and_reduce": {
+          "summary": "The vnode routing dispatches individual endpoint requests through the range-and-reduce method."
+        },
+        "mapreduce_service::dispatch_delete_range_and_reduce->filtering_delete_retrying_dispatcher::dispatch_to_node": {
+          "summary": "The range-and-reduce method uses the retry dispatcher to send requests to target nodes with fault tolerance."
+        },
+        "filtering_delete_retrying_dispatcher::dispatch_to_node->mapreduce_service::dispatch_delete_to_shards": {
+          "summary": "The retry dispatcher falls back to local shard dispatch when executing locally or when remote communication fails."
+        },
+        "mapreduce_service::dispatch_delete_to_shards->mapreduce_service::execute_delete_on_this_shard": {
+          "summary": "The shard dispatch fans out execution to all local CPU shards in parallel."
+        },
+        "mapreduce_service::dispatch_delete_to_tablets->filtering_delete_tablet_algorithm::dispatch_work_and_wait_to_finish": {
+          "summary": "The tablet routing delegates to the algorithm's dispatch loop after initialization."
+        },
+        "filtering_delete_tablet_algorithm::dispatch_work_and_wait_to_finish->filtering_delete_retrying_dispatcher::dispatch_to_node": {
+          "summary": "The tablet algorithm dispatches individual range requests to tablet replicas through the retry dispatcher."
+        },
+        "filtering_delete_tablet_algorithm::dispatch_work_and_wait_to_finish->filtering_delete_tablet_algorithm::prepare_ranges_per_replica": {
+          "summary": "The dispatch loop re-prepares the replica mapping on each iteration to handle topology changes."
+        },
+        "mapreduce_service::init_messaging_service->mapreduce_service::dispatch_delete_to_shards": {
+          "summary": "The RPC verb handler for incoming filtering delete requests routes to the local shard dispatch method."
+        }
+      }
     }
   },
   "newFiles": [
     "cql3/statements/filtering_delete_statement.cc",
-    "cql3/statements/filtering_delete_statement.hh",
-    "idl/filtering_delete_request.idl.hh",
-    "test/boost/filtering_test.cc (additions)",
-    "test/cqlpy/test_delete_allow_filtering.py"
+    "cql3/statements/filtering_delete_statement.hh"
   ],
   "modifiedFiles": [
-    "configure.py",
-    "cql3/Cql.g",
+    "cql3/expr/expr-utils.hh",
+    "cql3/expr/expression.cc",
     "cql3/query_processor.cc",
     "cql3/query_processor.hh",
+    "cql3/restrictions/statement_restrictions.hh",
     "cql3/statements/delete_statement.cc",
     "cql3/statements/modification_statement.cc",
     "cql3/statements/modification_statement.hh",
     "cql3/statements/raw/delete_statement.hh",
     "cql3/statements/raw/modification_statement.hh",
+    "cql3/stats.hh",
     "gms/feature_service.hh",
     "message/messaging_service.cc",
     "message/messaging_service.hh",
     "query/query-request.hh",
     "query/query.cc",
     "service/mapreduce_service.cc",
-    "service/mapreduce_service.hh"
+    "service/mapreduce_service.hh",
+    "types/types.cc"
   ]
 }

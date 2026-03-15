@@ -19,7 +19,9 @@
     --text: #1a1d24;
     --text-muted: #5c6370;
     --accent: #4ab8c9;
+    --accent-btn: #557da4;
     --glow: rgba(74,184,201,0.18);
+    --glow-btn: rgba(85,125,164,0.22);
     --shadow: rgba(0,0,0,0.06);
     --edge-color: #b8bfca;
     --edge-highlight: #4ab8c9;
@@ -38,7 +40,9 @@
     --text: #f8f8f2;
     --text-muted: #75715e;
     --accent: #66d9ef;
+    --accent-btn: #7da7d1;
     --glow: rgba(102,217,239,0.25);
+    --glow-btn: rgba(125,167,209,0.3);
     --shadow: rgba(0,0,0,0.4);
     --edge-color: #3e3d32;
     --edge-highlight: #66d9ef;
@@ -84,22 +88,22 @@
   .search-box {
     position: relative;
     flex: 0 1 260px;
-    margin-left: auto;
   }
   .search-box input {
     width: 100%;
-    padding: 8px 30px 8px 34px;
-    border-radius: 8px;
+    padding: 7px 30px 7px 34px;
+    border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
     font-size: 13px;
     font-weight: 400;
     outline: none;
-    transition: border-color 0.2s, background 0.3s;
+    transition: border-color 0.2s, background 0.3s, box-shadow 0.2s;
     font-family: inherit;
+    box-shadow: 0 1px 2px var(--shadow);
   }
-  .search-box input:focus { border-color: var(--accent); }
+  .search-box input:focus { border-color: var(--accent-btn); box-shadow: 0 1px 6px var(--glow-btn); }
   .search-box::before {
     content: '\1F50D';
     position: absolute;
@@ -131,6 +135,7 @@
     font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
+    margin-left: auto;
   }
 
   /* SVG area */
@@ -153,14 +158,11 @@
     z-index: 90;
     overflow: hidden;
     opacity: 0;
-    transform: translateX(-20px);
-    transition: opacity 0.3s, transform 0.3s, background 0.3s, border-color 0.3s;
     pointer-events: none;
     box-shadow: 0 4px 24px var(--shadow);
   }
   .info-panel.visible {
     opacity: 1;
-    transform: translateX(0);
     pointer-events: all;
   }
   .info-header {
@@ -267,14 +269,11 @@
     z-index: 90;
     overflow: hidden;
     opacity: 0;
-    transform: translateX(20px);
-    transition: opacity 0.25s, transform 0.25s, background 0.3s, border-color 0.3s;
     pointer-events: none;
     box-shadow: 0 4px 24px var(--shadow);
   }
   .dep-detail-panel.visible {
     opacity: 1;
-    transform: translateX(0);
     pointer-events: all;
   }
   .dep-detail-header {
@@ -339,73 +338,110 @@
   .theme-toggle {
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 12px;
+    border-radius: 10px;
+    padding: 7px 11px;
     cursor: pointer;
-    font-size: 17px;
+    font-size: 16px;
     line-height: 1;
-    color: var(--text);
-    transition: background 0.2s, border-color 0.2s;
+    color: var(--text-muted);
+    transition: background 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s;
     flex-shrink: 0;
+    box-shadow: 0 1px 2px var(--shadow);
   }
   .theme-toggle:hover {
-    background: var(--border);
+    background: var(--bg);
+    border-color: var(--accent-btn);
+    color: var(--text);
+    box-shadow: 0 1px 6px var(--glow-btn);
   }
 
   /* Toolbar buttons */
   .tool-btn {
-    background: var(--bg-tertiary);
+    background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 16px;
+    border-radius: 10px;
+    padding: 7px 16px;
     cursor: pointer;
     font-size: 13px;
     font-weight: 500;
     line-height: 1;
     color: var(--text-muted);
-    transition: background 0.2s, border-color 0.2s, color 0.2s;
+    transition: background 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s;
     flex-shrink: 0;
     white-space: nowrap;
     font-family: inherit;
+    box-shadow: 0 1px 2px var(--shadow);
   }
   .tool-btn:hover {
-    background: var(--border);
+    background: var(--bg-tertiary);
+    border-color: var(--accent-btn);
     color: var(--text);
+    box-shadow: 0 1px 6px var(--glow-btn);
   }
   .tool-btn.active {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--accent-btn);
+    border-color: var(--accent-btn);
     color: #fff;
+    box-shadow: 0 1px 8px var(--glow-btn);
   }
   .tool-sep {
     width: 1px;
-    height: 24px;
+    height: 22px;
     background: var(--border);
     flex-shrink: 0;
+    opacity: 0.6;
   }
 
-  /* Path finder cursor hint */
-  .path-mode-hint {
-    position: fixed;
-    bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--bg-secondary);
-    border: 1px solid var(--accent);
-    border-radius: 8px;
-    padding: 8px 16px;
-    font-size: 13px;
-    color: var(--text);
-    z-index: 95;
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.3s;
-    font-family: inherit;
-  }
-  .path-mode-hint.visible { opacity: 1; }
 
-  /* Diff overlay styles */
-  .diff-info-badge {
+   /* Top-level view tabs */
+   .view-tabs {
+     display: flex;
+     gap: 0;
+     border: 1px solid var(--border);
+     border-radius: 10px;
+     overflow: hidden;
+     flex-shrink: 0;
+     box-shadow: 0 1px 2px var(--shadow);
+   }
+   .view-tab {
+     padding: 7px 15px;
+     font-size: 13px;
+     font-weight: 500;
+     cursor: pointer;
+     background: var(--bg);
+     color: var(--text-muted);
+     border: none;
+     font-family: inherit;
+     transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+     white-space: nowrap;
+   }
+   .view-tab:not(:last-child) {
+     border-right: 1px solid var(--border);
+   }
+   .view-tab:hover {
+     color: var(--text);
+     background: var(--bg-tertiary);
+   }
+   .view-tab.active {
+     background: var(--accent-btn);
+     color: #fff;
+     box-shadow: inset 0 1px 0 rgba(255,255,255,0.15);
+   }
+
+   /* Context toolbars — arch and diff share the same space */
+   .context-toolbar {
+     display: flex;
+     align-items: center;
+     gap: 10px;
+     flex: 1;
+     min-width: 0;
+   }
+   .diff-level-tabs {
+     flex-shrink: 0;
+   }
+
+   /* Diff overlay styles */
+   .diff-info-badge {
     display: inline-block;
     font-size: 11px;
     padding: 2px 8px;
@@ -462,24 +498,33 @@
 <div class="header">
   <img class="header-logo" src="data:image/svg+xml,%3Csvg viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%237dd4e0'/%3E%3Cstop offset='100%25' stop-color='%234ab8c9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M40 8C18 8 8 24 8 40c0 12 4 20 6 26l4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8 4 8 4-8c2-6 10-14 10-26C72 24 62 8 40 8z' fill='url(%23g)'/%3E%3Cellipse cx='34' cy='34' rx='12' ry='13' fill='white'/%3E%3Cellipse cx='37' cy='36' rx='6' ry='7' fill='%232d2d5e'/%3E%3Cpath d='M28 48Q34 54 44 48' stroke='%232d2d5e' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Crect x='52' y='28' width='8' height='36' rx='2' fill='%235b5b8e'/%3E%3Crect x='55' y='36' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3Crect x='60' y='30' width='8' height='34' rx='2' fill='%23e8a83e'/%3E%3Crect x='63' y='38' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3Crect x='68' y='28' width='8' height='36' rx='2' fill='%239e3b3b'/%3E%3Crect x='71' y='36' width='2' height='14' rx='1' fill='white' opacity='.7'/%3E%3C/svg%3E" alt="logo">
   <h1>ScyllaDB Architecture</h1>
+  <div class="tool-sep"></div>
+  <div class="view-tabs">
+    <button class="view-tab active" id="tabArch" title="Architecture dependency graph">Architecture</button>
+    <button class="view-tab" id="tabDiff" title="Diff analysis graph">Diff Analysis</button>
+  </div>
+  <div class="tool-sep"></div>
+  <!-- Context area: arch and diff toolbars share this space -->
+  <div class="context-toolbar" id="archToolbar">
+    <button class="tool-btn" id="btnDetailed" title="Toggle detailed view with additional nodes and edges">Detailed</button>
+    <div class="stats" id="stats"></div>
+  </div>
+  <div class="context-toolbar" id="diffToolbar" style="display:none">
+    <div class="view-tabs diff-level-tabs">
+      <button class="view-tab active" data-level="peering_service" title="Service-level view (press 1)">Services</button>
+      <button class="view-tab" data-level="class" title="Class-level view (press 2)">Classes</button>
+    </div>
+  </div>
+  <!-- Search + theme (always visible) -->
   <div class="search-box">
     <input type="text" placeholder="Search..." id="searchInput">
     <button class="search-clear" id="searchClear">&times;</button>
   </div>
-  <div class="stats" id="stats"></div>
-  <div class="tool-sep"></div>
-  <button class="tool-btn" id="btnDetailed" title="Toggle detailed view with additional nodes and edges">Detailed</button>
-  <div class="tool-sep"></div>
-  <button class="tool-btn" id="btnDiff" title="Show diff overlay for the last commit">Diff</button>
-  <div class="tool-sep"></div>
-  <button class="tool-btn" id="btnPath" title="Click two nodes to find shortest path">Path</button>
-  <div class="tool-sep"></div>
   <button class="theme-toggle" id="themeToggle" title="Toggle dark/light theme">&#9790;</button>
 </div>
 
-<div class="path-mode-hint" id="pathHint">Click a source node, then a target node</div>
-
 <svg id="graph"></svg>
+<svg id="diffGraph" style="display:none"></svg>
 
 <div class="info-panel" id="infoPanel">
   <div class="info-header">
@@ -511,10 +556,6 @@ const height = window.innerHeight - 48;
 let selectedNode = null;
 let simulation = null;
 
-// Analysis mode state
-let analysisMode = null;    // null | 'path'
-let pathSource = null;      // node id for path finder start
-let pathTarget = null;      // node id for path finder end
 let currentNodes = [];      // live references to rendered nodes
 let currentEdges = [];      // live references to rendered edges
 let currentNodeSel = null;  // d3 selection for nodes
@@ -525,19 +566,6 @@ let activeNodes = classNodes;
 let activeEdges = classEdges;
 let detailedMode = false;
 let detailedDataLoaded = false;
-
-// Overlay callback system — external scripts can register post-render hooks
-const postRenderCallbacks = [];
-
-// Overlay intercept functions — overlay scripts can set these to override behavior
-// If set, these are called instead of the default behavior
-let overlayClickHandler = null;        // (nodeData, edges) => bool — return true if handled
-let overlayHoverHandler = null;        // (depKey, depStrength, depDir, li) => bool
-let overlayHoverOutHandler = null;     // () => void
-let overlayBgClickHandler = null;      // () => void — called when SVG background is clicked in overlay mode
-let overlayNodeHoverHandler = null;    // (nodeData, edges) => void — called on graph node hover in overlay mode
-let overlayNodeHoverOutHandler = null; // () => void — called on graph node mouseout in overlay mode
-let overlayDeactivateHandler = null;   // () => void — called to fully deactivate the overlay mode
 
 // Theme helpers — read CSS variables at runtime
 function css(varName) {
@@ -657,18 +685,10 @@ function renderClassView() {
     e.mutual = directedPairs.has(e.target + '->' + e.source);
   });
 
-  // Node sizes from in-degree
-  const inDeg = {};
-  edges.forEach(e => { inDeg[e.target] = (inDeg[e.target] || 0) + e.strength; });
-  const maxIn = Math.max(1, ...Object.values(inDeg));
+  // Uniform node sizes
   nodes.forEach(n => {
-    n.radius = 22 + ((inDeg[n.id] || 0) / maxIn) * 22;
-  });
-
-  // Compute pill half-widths based on text length
-  nodes.forEach(n => {
-    const textLen = n.id.replace(/_/g, ' ').length;
-    n.pillW = Math.min(Math.max(n.radius * 1.4, textLen * 3.4 + 10), 80);
+    n.radius = 30;
+    n.pillW = 72;
   });
 
   // --- LAYERED LAYOUT ---
@@ -803,11 +823,11 @@ function renderClassView() {
 
   // Class name
   node.append('text')
-    .text(d => d.id.replace(/_/g, ' '))
+    .text(d => d.id)
     .attr('text-anchor', 'middle')
     .attr('dy', '-0.1em')
     .attr('fill', d => getNodeColor(d))
-    .attr('font-size', d => Math.max(10.5, Math.min(13, d.radius * 0.35)))
+    .attr('font-size', 11.5)
     .attr('font-weight', 600)
     .attr('pointer-events', 'none')
     .style('text-shadow', cTextShadow);
@@ -818,22 +838,28 @@ function renderClassView() {
     .attr('text-anchor', 'middle')
     .attr('dy', '1.15em')
     .attr('fill', cMuted)
-    .attr('font-size', d => Math.max(10, Math.min(12, d.radius * 0.3)))
+    .attr('font-size', 10)
     .attr('pointer-events', 'none');
+
+  // Auto-fit text to node width
+  node.each(function(d) {
+    const g = d3.select(this);
+    const maxW = d.pillW * 2 - 12;
+    g.selectAll('text').each(function() {
+      const el = this;
+      const len = el.getComputedTextLength();
+      if (len > maxW) {
+        const curSize = parseFloat(el.getAttribute('font-size'));
+        el.setAttribute('font-size', curSize * maxW / len);
+      }
+    });
+  });
 
   // Interactivity
   node.on('mouseover', (e, d) => {
-    if (analysisMode) return;
     // When a node is selected, hovering another node shows its info in the right panel
     if (selectedNode) {
       if (d.id === selectedNode) return;
-      // In diff mode, skip non-touched (grayed out) nodes
-      if (overlayClickHandler) {
-        if (typeof touchedNodeIds !== 'undefined' && !touchedNodeIds.has(d.id)) return;
-        // Let overlay handler decide whether to blink (only if edge exists)
-        if (overlayNodeHoverHandler) overlayNodeHoverHandler(d, edges);
-        return;
-      }
       // Normal mode: skip nodes not connected to the selected node
       var connectedToSel = false;
       edges.forEach(function(edge) {
@@ -864,8 +890,8 @@ function renderClassView() {
         var tgtNode = nodeMap[tid];
         var depInfo = DEP_TYPES[hovEdge.type];
         var depColor = depInfo?.color || css('--text-muted');
-        var srcLabel = srcNode ? srcNode.ns + '::' + sid : sid;
-        var tgtLabel = tgtNode ? tgtNode.ns + '::' + tid : tid;
+        var srcLabel = sid;
+        var tgtLabel = tid;
         var depKey = sid + '->' + tid + '->' + hovEdge.type;
 
         document.getElementById('depDetailDot').style.background = depColor;
@@ -887,48 +913,19 @@ function renderClassView() {
       }
       return;
     }
-    if (overlayClickHandler) return;
-    // No hover dimming in normal mode when nothing is selected
   }).on('mouseout', (e, d) => {
-    if (analysisMode) return;
     if (selectedNode) {
       if (d.id === selectedNode) return;
       if (currentNodeSel) currentNodeSel.classed('node-blink', false);
-      if (overlayClickHandler) {
-        if (overlayNodeHoverOutHandler) overlayNodeHoverOutHandler();
-      } else {
-        depDetailPanel.classed('visible', false);
-      }
+      depDetailPanel.classed('visible', false);
       return;
     }
-    if (overlayClickHandler) return;
   }).on('click', (e, d) => {
     e.stopPropagation();
     // Stop any node blink animation
     if (currentNodeSel) currentNodeSel.classed('node-blink', false);
 
-    // Path finder mode
-    if (analysisMode === 'path') {
-      if (!pathSource) {
-        pathSource = d.id;
-        // Highlight source node
-        node.select('rect')
-          .attr('stroke-width', n => n.id === d.id ? 3.5 : 1.5)
-          .attr('stroke', n => n.id === d.id ? css('--accent') : getNodeColor(n));
-        document.getElementById('pathHint').textContent = 'Now click the target node';
-        return;
-      } else if (d.id !== pathSource) {
-        pathTarget = d.id;
-        selectedNode = d.id;
-        applyPathHighlight(pathSource, pathTarget);
-        document.getElementById('pathHint').classList.remove('visible');
-        return;
-      }
-      return;
-    }
-
     // Normal click behavior
-    if (overlayClickHandler && overlayClickHandler(d, edges)) return;
     if (selectedNode === d.id) { selectedNode = null; resetClassHighlight(node, link); hideInfoPanel(); return; }
     selectedNode = d.id;
     highlightClassNode(d, nodes, edges, node, link);
@@ -936,17 +933,6 @@ function renderClassView() {
   });
 
   svg.on('click', () => {
-    if (analysisMode) {
-      clearAnalysis();
-      hideInfoPanel();
-      return;
-    }
-    if (overlayClickHandler) {
-      // In overlay mode (e.g. diff), background click deselects node and notifies overlay
-      selectedNode = null;
-      if (overlayBgClickHandler) overlayBgClickHandler();
-      return;
-    }
     selectedNode = null;
     resetClassHighlight(node, link);
     hideInfoPanel();
@@ -956,9 +942,6 @@ function renderClassView() {
   zoomToFit(nodes, 100);
 
   d3.select('#stats').text(nodes.length + ' classes, ' + edges.length + ' dependencies');
-
-  // Invoke post-render callbacks (used by overlays like diff-overlay.js)
-  postRenderCallbacks.forEach(cb => cb());
 }
 
 
@@ -1080,8 +1063,7 @@ function zoomToFit(nodes, padding) {
   const cy = (y0 + y1) / 2;
   const tx = svgW / 2 - cx * scale;
   const ty = svgH / 2 - cy * scale;
-  svg.transition().duration(800).ease(d3.easeCubicOut)
-    .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+   svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
 }
 
 function panToNode(d) {
@@ -1094,8 +1076,7 @@ function panToNode(d) {
   const panelOffset = infoPanel.classed('visible') ? 150 : 0;
   const tx = (svgW / 2 + panelOffset) - d.x * scale;
   const ty = svgH / 2 - d.y * scale;
-  svg.transition().duration(500).ease(d3.easeCubicOut)
-    .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+  svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
 }
 
 function selectNode(nodeId) {
@@ -1159,7 +1140,7 @@ function hideInfoPanel() { infoPanel.classed('visible', false); depDetailPanel.c
 
 function showClassInfo(d, edges) {
   d3.select('#infoDot').style('background', getNodeColor(d));
-  d3.select('#infoTitle').text(d.ns + '::' + d.id);
+  d3.select('#infoTitle').text(d.id);
 
   const outEdges = edges.filter(e => {
     const sid = typeof e.source === 'object' ? e.source.id : e.source;
@@ -1181,7 +1162,7 @@ function showClassInfo(d, edges) {
       const tid = typeof e.target === 'object' ? e.target.id : e.target;
       const tn = nodeMap[tid];
       const c = DEP_TYPES[e.type]?.color || muted;
-      const tLabel = tn ? tn.ns + '::' + tid : tid;
+      const tLabel = tid;
       const depKey = d.id + '->' + tid + '->' + e.type;
       html += '<li data-node-id="'+tid+'" data-dep-key="'+depKey+'" data-dep-strength="'+e.strength+'" data-dep-dir="out"><span class="dep-dot" style="background:'+c+'"></span>' + tLabel + ' <span class="dep-type">' + e.type + '</span></li>';
     });
@@ -1193,7 +1174,7 @@ function showClassInfo(d, edges) {
       const sid = typeof e.source === 'object' ? e.source.id : e.source;
       const sn = nodeMap[sid];
       const c = DEP_TYPES[e.type]?.color || muted;
-      const sLabel = sn ? sn.ns + '::' + sid : sid;
+      const sLabel = sid;
       const depKey = sid + '->' + d.id + '->' + e.type;
       html += '<li data-node-id="'+sid+'" data-dep-key="'+depKey+'" data-dep-strength="'+e.strength+'" data-dep-dir="in"><span class="dep-dot" style="background:'+c+'"></span>' + sLabel + ' <span class="dep-type">' + e.type + '</span></li>';
     });
@@ -1206,159 +1187,6 @@ function showClassInfo(d, edges) {
 
 
 // =============================================================================
-// GRAPH ALGORITHMS
-// =============================================================================
-
-// BFS shortest directed path from src to dst
-function bfsPath(srcId, dstId, edges) {
-  const adj = {};
-  edges.forEach(e => {
-    const sid = typeof e.source === 'object' ? e.source.id : e.source;
-    const tid = typeof e.target === 'object' ? e.target.id : e.target;
-    if (!adj[sid]) adj[sid] = [];
-    adj[sid].push(tid);
-  });
-  const visited = new Set([srcId]);
-  const parent = {};
-  const queue = [srcId];
-  while (queue.length) {
-    const cur = queue.shift();
-    if (cur === dstId) {
-      // reconstruct
-      const path = [];
-      let n = dstId;
-      while (n !== srcId) {
-        path.unshift(n);
-        n = parent[n];
-      }
-      path.unshift(srcId);
-      return path;
-    }
-    (adj[cur] || []).forEach(nb => {
-      if (!visited.has(nb)) {
-        visited.add(nb);
-        parent[nb] = cur;
-        queue.push(nb);
-      }
-    });
-  }
-  return null; // no path
-}
-
-
-// =============================================================================
-// ANALYSIS HIGHLIGHT FUNCTIONS
-// =============================================================================
-
-function applyPathHighlight(srcId, dstId) {
-  if (!currentNodeSel || !currentLinkSel) return;
-  const path = bfsPath(srcId, dstId, currentEdges);
-
-  if (!path) {
-    d3.select('#infoDot').style('background', css('--accent'));
-    d3.select('#infoTitle').text('Path');
-    d3.select('#infoBody').html('<p>No directed path found from <strong>' + srcId.replace(/_/g,' ') + '</strong> to <strong>' + dstId.replace(/_/g,' ') + '</strong>.</p>');
-    infoPanel.classed('visible', true);
-    return;
-  }
-
-  const pathSet = new Set(path);
-  const pathEdges = new Set();
-  for (let i = 0; i < path.length - 1; i++) {
-    pathEdges.add(path[i] + '->' + path[i+1]);
-  }
-
-  const accentColor = css('--accent');
-
-  currentNodeSel.select('rect')
-    .attr('fill-opacity', n => pathSet.has(n.id) ? 0.25 : 0.02)
-    .attr('stroke-opacity', n => pathSet.has(n.id) ? 1 : 0.08)
-    .attr('stroke-width', n => {
-      if (n.id === srcId || n.id === dstId) return 3.5;
-      if (pathSet.has(n.id)) return 2.5;
-      return 1;
-    })
-    .attr('stroke', n => {
-      if (pathSet.has(n.id)) return accentColor;
-      return getNodeColor(n);
-    });
-
-  currentNodeSel.selectAll('text')
-    .attr('fill-opacity', n => pathSet.has(n.id) ? 1 : 0.08);
-
-  currentLinkSel.attr('stroke-opacity', e => {
-    const sid = typeof e.source === 'object' ? e.source.id : e.source;
-    const tid = typeof e.target === 'object' ? e.target.id : e.target;
-    if (pathEdges.has(sid + '->' + tid)) return 0.9;
-    return 0.02;
-  }).attr('stroke', e => {
-    const sid = typeof e.source === 'object' ? e.source.id : e.source;
-    const tid = typeof e.target === 'object' ? e.target.id : e.target;
-    if (pathEdges.has(sid + '->' + tid)) return accentColor;
-    return edgeColor(e);
-  }).attr('stroke-width', e => {
-    const sid = typeof e.source === 'object' ? e.source.id : e.source;
-    const tid = typeof e.target === 'object' ? e.target.id : e.target;
-    if (pathEdges.has(sid + '->' + tid)) return 3;
-    return edgeStrokeWidth(e.strength);
-  });
-
-  // Info panel
-  d3.select('#infoDot').style('background', accentColor);
-  d3.select('#infoTitle').text('Shortest Path');
-  let html = '<p>' + (path.length - 1) + ' hop' + (path.length - 1 !== 1 ? 's' : '') + ' from <strong>' + srcId.replace(/_/g,' ') + '</strong> to <strong>' + dstId.replace(/_/g,' ') + '</strong>.</p>';
-  html += '<h3>Path</h3><ul class="dep-list">';
-  path.forEach((id, i) => {
-    const n = activeNodes.find(cn => cn.id === id);
-    const c = n ? getNodeColor(n) : css('--text-muted');
-    html += '<li><span class="dep-dot" style="background:'+c+'"></span>' + (n ? n.ns + '::' : '') + id;
-    if (i < path.length - 1) html += ' <span class="dep-type" style="margin-left:auto">&rarr;</span>';
-    html += '</li>';
-  });
-  html += '</ul>';
-  d3.select('#infoBody').html(html);
-  infoPanel.classed('visible', true);
-}
-
-function clearAnalysis() {
-  analysisMode = null;
-  pathSource = null;
-  pathTarget = null;
-  document.getElementById('btnPath').classList.remove('active');
-  document.getElementById('pathHint').classList.remove('visible');
-  // Reset highlights
-  if (currentNodeSel && currentLinkSel) {
-    resetClassHighlight(currentNodeSel, currentLinkSel);
-    // Restore original edge strokes
-    currentLinkSel.attr('stroke', d => edgeColor(d))
-      .attr('stroke-width', d => edgeStrokeWidth(d.strength));
-    currentNodeSel.select('rect').attr('stroke', d => getNodeColor(d));
-  }
-}
-
-
-// =============================================================================
-// TOOLBAR BUTTONS
-// =============================================================================
-
-// Path finder toggle
-document.getElementById('btnPath').addEventListener('click', () => {
-  if (analysisMode === 'path') {
-    clearAnalysis();
-    hideInfoPanel();
-    return;
-  }
-  clearAnalysis();
-  analysisMode = 'path';
-  pathSource = null;
-  pathTarget = null;
-  document.getElementById('btnPath').classList.add('active');
-  document.getElementById('pathHint').textContent = 'Click a source node, then a target node';
-  document.getElementById('pathHint').classList.add('visible');
-});
-
-
-// =============================================================================
 // TABS + SEARCH + KEYS
 // =============================================================================
 
@@ -1368,14 +1196,20 @@ function searchNorm(s) { return s.toLowerCase().replace(/[_ ]/g, ''); }
 searchInputEl.addEventListener('input', (e) => {
   const q = searchNorm(e.target.value.trim());
   e.target.closest('.search-box').classList.toggle('has-value', q.length > 0);
+
+  // In diff mode, delegate to diff graph search
+  if (window.diffGraph && window.diffGraph.isActive()) {
+    window.diffGraph.search(q);
+    return;
+  }
+
   if (!q) {
     nodeGroup.selectAll('g').style('opacity', 1);
     edgeGroup.selectAll('path').style('opacity', 1);
     return;
   }
   nodeGroup.selectAll('g').style('opacity', function(d) {
-    const match = searchNorm(d.id).includes(q) || searchNorm(d.ns || '').includes(q);
-    return match ? 1 : 0.08;
+    return searchNorm(d.id).includes(q) ? 1 : 0.08;
   });
   edgeGroup.selectAll('path').style('opacity', 0.05);
 });
@@ -1385,17 +1219,34 @@ searchInputEl.addEventListener('keydown', (e) => {
     searchInputEl.value = '';
     searchInputEl.closest('.search-box').classList.remove('has-value');
     searchInputEl.blur();
-    nodeGroup.selectAll('g').style('opacity', 1);
-    edgeGroup.selectAll('path').style('opacity', 1);
+    // Clear search in whichever view is active
+    if (window.diffGraph && window.diffGraph.isActive()) {
+      window.diffGraph.search('');
+    } else {
+      nodeGroup.selectAll('g').style('opacity', 1);
+      edgeGroup.selectAll('path').style('opacity', 1);
+    }
     return;
   }
   if (e.key === 'Enter') {
     const q = searchNorm(searchInputEl.value.trim());
     if (!q) return;
+
+    // In diff mode, select the single match
+    if (window.diffGraph && window.diffGraph.isActive()) {
+      const matched = window.diffGraph.searchSelect(q);
+      if (matched) {
+        searchInputEl.value = '';
+        searchInputEl.closest('.search-box').classList.remove('has-value');
+        searchInputEl.blur();
+        window.diffGraph.search('');
+      }
+      return;
+    }
+
     const matches = [];
     nodeGroup.selectAll('g').each(function(d) {
-      const match = searchNorm(d.id).includes(q) || searchNorm(d.ns || '').includes(q);
-      if (match) matches.push(d);
+      if (searchNorm(d.id).includes(q)) matches.push(d);
     });
     if (matches.length === 1) {
       searchInputEl.value = '';
@@ -1405,12 +1256,7 @@ searchInputEl.addEventListener('keydown', (e) => {
       edgeGroup.selectAll('path').style('opacity', 1);
       // Select and pan to the matched node
       const d = matches[0];
-      if (overlayClickHandler) {
-        overlayClickHandler(d, currentEdges);
-        panToNode(d);
-      } else {
-        selectNode(d.id);
-      }
+      selectNode(d.id);
     }
   }
 });
@@ -1419,8 +1265,12 @@ document.getElementById('searchClear').addEventListener('click', () => {
   searchInputEl.value = '';
   searchInputEl.closest('.search-box').classList.remove('has-value');
   searchInputEl.focus();
-  nodeGroup.selectAll('g').style('opacity', 1);
-  edgeGroup.selectAll('path').style('opacity', 1);
+  if (window.diffGraph && window.diffGraph.isActive()) {
+    window.diffGraph.search('');
+  } else {
+    nodeGroup.selectAll('g').style('opacity', 1);
+    edgeGroup.selectAll('path').style('opacity', 1);
+  }
 });
 
 // WASD continuous pan
@@ -1476,19 +1326,8 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
   if (e.key === 'Escape') {
-    if (overlayClickHandler) {
-      // In overlay mode (e.g. diff):
-      // - If a node is selected (detail view), go back to the overview
-      // - If no node is selected (overview), deactivate the overlay entirely
-      if (selectedNode) {
-        selectedNode = null;
-        if (overlayBgClickHandler) overlayBgClickHandler();
-      } else {
-        if (overlayDeactivateHandler) overlayDeactivateHandler();
-      }
-      return;
-    }
-    clearAnalysis();
+    // If diff graph is active, let it handle its own Escape
+    if (window.diffGraph && window.diffGraph.isActive()) return;
     selectedNode = null;
     hideInfoPanel();
     nodeGroup.selectAll('g').style('opacity', 1);
@@ -1497,7 +1336,6 @@ document.addEventListener('keydown', (e) => {
     document.querySelector('.search-box').classList.remove('has-value');
     if (currentNodeSel && currentLinkSel) {
       resetClassHighlight(currentNodeSel, currentLinkSel);
-      // Restore original edge strokes
       currentLinkSel.attr('stroke', d => edgeColor(d))
         .attr('stroke-width', d => edgeStrokeWidth(d.strength));
       currentNodeSel.select('rect').attr('stroke', d => getNodeColor(d));
@@ -1525,19 +1363,12 @@ document.addEventListener('keyup', (e) => {
 });
 
 document.getElementById('infoClose').addEventListener('click', () => {
-  if (overlayClickHandler) {
-    // In overlay mode (e.g. diff):
-    // - If a node is selected (detail view), go back to the overview
-    // - If no node is selected (overview), deactivate the overlay entirely
-    if (selectedNode) {
-      selectedNode = null;
-      if (overlayBgClickHandler) overlayBgClickHandler();
-    } else {
-      if (overlayDeactivateHandler) overlayDeactivateHandler();
-    }
+  // If diff graph is active, let it handle its own panel close
+  if (window.diffGraph && window.diffGraph.isActive()) {
+    infoPanel.classed('visible', false);
+    depDetailPanel.classed('visible', false);
     return;
   }
-  clearAnalysis();
   selectedNode = null;
   hideInfoPanel();
   if (currentNodeSel && currentLinkSel) {
@@ -1550,24 +1381,20 @@ document.getElementById('infoClose').addEventListener('click', () => {
 
 // Clickable dependency items in info panel
 document.getElementById('infoBody').addEventListener('click', (e) => {
+  // Skip when diff graph is active (it handles its own clicks)
+  if (window.diffGraph && window.diffGraph.isActive()) return;
   const li = e.target.closest('li[data-node-id]');
   if (!li) return;
   e.stopPropagation();
   const nodeId = li.getAttribute('data-node-id');
   if (!nodeId) return;
-  // In overlay mode, delegate to the overlay click handler
-  if (overlayClickHandler && currentNodes && currentEdges) {
-    const d = currentNodes.find(n => n.id === nodeId);
-    if (d && overlayClickHandler(d, currentEdges)) {
-      panToNode(d);
-      return;
-    }
-  }
   selectNode(nodeId);
 });
 
 // Hover on dependency items to show detail in right panel
 document.getElementById('infoBody').addEventListener('mouseover', (e) => {
+  // Skip when diff graph is active (it handles its own hover)
+  if (window.diffGraph && window.diffGraph.isActive()) return;
   // Handle dep-key items (dependency detail hover)
   const depLi = e.target.closest('li[data-dep-key]');
   if (depLi) {
@@ -1575,9 +1402,6 @@ document.getElementById('infoBody').addEventListener('mouseover', (e) => {
     const depStrength = depLi.getAttribute('data-dep-strength');
     const depDir = depLi.getAttribute('data-dep-dir');
     if (!depKey) return;
-
-    // Let overlay intercept if set
-    if (overlayHoverHandler && overlayHoverHandler(depKey, depStrength, depDir, depLi)) return;
 
     // Blink the dependency node on the graph
     const depNodeId = depLi.getAttribute('data-node-id');
@@ -1599,8 +1423,8 @@ document.getElementById('infoBody').addEventListener('mouseover', (e) => {
     const depColor = depInfo?.color || css('--text-muted');
 
     // Build title
-    const srcLabel = srcNode ? srcNode.ns + '::' + srcId : srcId;
-    const tgtLabel = tgtNode ? tgtNode.ns + '::' + tgtId : tgtId;
+    const srcLabel = srcId;
+    const tgtLabel = tgtId;
 
     document.getElementById('depDetailDot').style.background = depColor;
     document.getElementById('depDetailTitle').textContent = srcLabel + ' \u2192 ' + tgtLabel;
@@ -1636,10 +1460,11 @@ document.getElementById('infoBody').addEventListener('mouseover', (e) => {
 });
 
 document.getElementById('infoBody').addEventListener('mouseout', (e) => {
+  // Skip when diff graph is active
+  if (window.diffGraph && window.diffGraph.isActive()) return;
   // Check if we're still within an interactive list item
   const related = e.relatedTarget;
   if (related && related.closest && (related.closest('#infoBody li[data-dep-key]') || related.closest('#infoBody li[data-node-id]'))) return;
-  if (overlayHoverOutHandler) overlayHoverOutHandler();
   depDetailPanel.classed('visible', false);
   // Stop blinking
   if (currentNodeSel) currentNodeSel.classed('node-blink', false);
@@ -1647,7 +1472,7 @@ document.getElementById('infoBody').addEventListener('mouseout', (e) => {
 
 // Handle resize
 window.addEventListener('resize', () => {
-  clearAnalysis();
+  if (window.diffGraph && window.diffGraph.isActive()) return; // diff-graph handles its own resize
   selectedNode = null;
   hideInfoPanel();
   renderClassView();
@@ -1679,7 +1504,6 @@ btnDetailed.addEventListener('click', () => {
       }
       btnDetailed.classList.remove('active');
     }
-    clearAnalysis();
     selectedNode = null;
     hideInfoPanel();
     renderClassView();
@@ -1715,17 +1539,76 @@ document.getElementById('themeToggle').addEventListener('click', () => {
     document.getElementById('themeToggle').innerHTML = '&#9788;'; // sun
   }
   rebuildMarkers();
-  clearAnalysis();
   selectedNode = null;
   hideInfoPanel();
-  renderClassView();
+  if (window.diffGraph && window.diffGraph.isActive()) {
+    window.diffGraph.render();
+  } else {
+    renderClassView();
+  }
 });
 
 // Initial render
 renderClassView();
 
+// =============================================================================
+// VIEW TAB SWITCHING (Architecture <-> Diff Analysis)
+// =============================================================================
+
+const _tabArch = document.getElementById('tabArch');
+const _tabDiff = document.getElementById('tabDiff');
+const _archToolbar = document.getElementById('archToolbar');
+const _diffToolbar = document.getElementById('diffToolbar');
+
+function switchToArch() {
+  _tabArch.classList.add('active');
+  _tabDiff.classList.remove('active');
+  // Show arch SVG, hide diff SVG
+  document.getElementById('graph').style.display = '';
+  // Deactivate diff graph
+  if (window.diffGraph) window.diffGraph.deactivate();
+  // Swap toolbars
+  _archToolbar.style.display = '';
+  _diffToolbar.style.display = 'none';
+  // Reset arch state
+  selectedNode = null;
+  hideInfoPanel();
+  renderClassView();
+}
+
+function switchToDiff() {
+  _tabDiff.classList.add('active');
+  _tabArch.classList.remove('active');
+  // Hide arch SVG
+  document.getElementById('graph').style.display = 'none';
+  // Swap toolbars
+  _archToolbar.style.display = 'none';
+  _diffToolbar.style.display = '';
+  // Reset arch state
+  selectedNode = null;
+  hideInfoPanel();
+  // Activate diff graph
+  if (window.diffGraph) window.diffGraph.activate();
+}
+
+_tabArch.addEventListener('click', switchToArch);
+_tabDiff.addEventListener('click', switchToDiff);
+
+// Diff level buttons (segmented group)
+document.querySelectorAll('#diffToolbar .view-tab[data-level]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const level = btn.getAttribute('data-level');
+    if (level && window.diffGraph) {
+      // Update active state in the segmented group
+      document.querySelectorAll('#diffToolbar .view-tab[data-level]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      window.diffGraph.switchLevel(level);
+    }
+  });
+});
+
 </script>
 <script src="data/diff-nodes.js"></script>
-<script src="diff-overlay.js"></script>
+<script src="diff-graph.js"></script>
 </body>
 </html>
