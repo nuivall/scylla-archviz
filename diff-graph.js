@@ -376,19 +376,12 @@
             if (hovEdge) _showEdgeDetail(hovEdge);
           }
         }
-      } else {
-        // No node selected — show summary tooltip on hover
-        if (d.summary) _showNodeTooltip(d);
       }
     });
 
     node.on('mouseout', () => {
       if (_currentNodeSel) _currentNodeSel.classed('node-blink', false);
-      if (_selectedNode) {
-        depDetailPanel.classed('visible', false);
-      } else {
-        depDetailPanel.classed('visible', false);
-      }
+      depDetailPanel.classed('visible', false);
     });
 
     // Edge interactivity — hover to show summary in depDetailPanel
@@ -628,22 +621,6 @@
     } else {
       bodyHtml += '<h3>How it\'s used</h3>';
       bodyHtml += '<p class="dep-desc-text" style="color:var(--text-muted);font-style:italic">No description available.</p>';
-    }
-    document.getElementById('depDetailBody').innerHTML = bodyHtml;
-    depDetailPanel.classed('visible', true);
-  }
-
-  function _showNodeTooltip(d) {
-    const color = _nodeColor(d);
-    document.getElementById('depDetailDot').style.background = color;
-    document.getElementById('depDetailTitle').textContent = d.id;
-
-    let bodyHtml = '';
-    bodyHtml += '<span class="dep-detail-type" style="border:1px solid ' + color + '">' + LEVEL_LABELS[activeLevel] + '</span>';
-    if (d.linesAdded > 0) bodyHtml += ' <span class="diff-info-badge lines-added">+' + d.linesAdded + '</span>';
-    if (d.linesRemoved > 0) bodyHtml += ' <span class="diff-info-badge lines-removed">-' + d.linesRemoved + '</span>';
-    if (d.summary) {
-      bodyHtml += '<p style="margin-top:8px">' + _escHtml(d.summary) + '</p>';
     }
     document.getElementById('depDetailBody').innerHTML = bodyHtml;
     depDetailPanel.classed('visible', true);
