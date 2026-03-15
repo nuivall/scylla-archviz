@@ -83,7 +83,7 @@ For each identified service, record:
 - `files`: list of source files belonging to this service in the diff
 - `linesAdded` / `linesRemoved`: aggregated across all files
 - `classes`: list of class IDs (from the class level) that belong to this service
-- `summary`: 2-5 sentence architectural description (see summary rules below)
+- `summary`: 1 sentence — the essence of what changed (see summary rules below)
 
 #### 4b. Identify service-to-service edges
 
@@ -92,7 +92,7 @@ Scan the diff for evidence of one service calling or using another:
 - New RPC verb registrations or handlers
 - New references or parameters added to a service's constructor
 
-Each edge is keyed as `source_service->target_service`. Write a 1-2 sentence summary describing what the dependency is used for in the context of the diff.
+Each edge is keyed as `source_service->target_service`. Write a single short sentence describing the essence of the dependency.
 
 Only include edges where the diff actually shows the interaction. Do not infer edges from general knowledge of the codebase.
 
@@ -113,7 +113,7 @@ For each class, record:
 - `files`: source files where this class is defined or modified
 - `linesAdded` / `linesRemoved`: lines changed in code belonging to this class
 - `peering_service`: the ID of the parent service this class belongs to (if any), or `null`
-- `summary`: 2-4 sentence description (see summary rules below)
+- `summary`: 1 sentence — the essence of how this class changed (see summary rules below)
 
 **Peering service classes are also class-level nodes.** A service like `mapreduce_service` appears both as a peering_service node and as a class node. Set `peering_service` to its own ID in this case.
 
@@ -125,7 +125,7 @@ Scan the diff for evidence of one class calling or using another:
 - Inheritance: class A extends or implements class B (if introduced or changed by the diff)
 - Parameter passing: class A receives class B as a parameter
 
-Each edge is keyed as `source_class->target_class`. Write a 1-2 sentence summary.
+Each edge is keyed as `source_class->target_class`. Write a single short sentence.
 
 Only include edges visible in the diff code.
 
@@ -150,25 +150,27 @@ Additional guidance:
 
 ### 7. Write summaries
 
+**All summaries must be extremely concise — just the essence.** The UI has limited space and users scan quickly.
+
 #### Node summaries (both levels)
 
-For each node at every level, write a high-level summary:
-- **peering_service**: 2-5 sentences describing what the diff does in this service. Focus on architectural impact.
-- **class**: 2-4 sentences describing how this class is changed and why.
+For each node at every level, write **exactly 1 sentence** capturing the essence:
+- **peering_service**: What the diff does in this service, in 1 sentence.
+- **class**: How this class changed and why, in 1 sentence.
 
 Rules:
-- Focus on the **what** and **why**, not raw code changes.
-- Describe architectural patterns, data flows, and behavioral changes.
+- **Maximum 1 sentence per node.** No exceptions.
+- Capture only the core "what changed" — omit elaboration, examples, and secondary details.
 - Do NOT quote specific function names, method names, variable names, class names, or type names in summaries.
-- The audience is someone reading an architecture diagram, not someone reviewing code.
+- The audience is someone glancing at an architecture diagram, not reading a code review.
 
 #### Edge summaries (both levels)
 
-For each edge at every level, write a 1-2 sentence summary describing what the dependency is used for. Same rules as node summaries: no code-level names, keep it architectural.
+For each edge, write **1 short sentence** (a sentence fragment is fine). Just state the essence of the dependency. Same rules: no code-level names.
 
 ### 8. Compose the commit summary
 
-Write a `title` (short, like a PR title) and a `summary` (2-4 sentences describing the overall change at an architectural level).
+Write a `title` (short, like a PR title) and a `summary` (1-2 sentences max describing the overall change at an architectural level).
 
 For multi-commit diffs, the title should describe the overall theme and the summary should cover the combined effect.
 
@@ -180,14 +182,14 @@ For multi-commit diffs, the title should describe the overall theme and the summ
 {
   "commit": "<short hash or range>",
   "title": "<short PR-style title>",
-  "summary": "<2-4 sentence architectural summary>",
+  "summary": "<1-2 sentence architectural summary>",
   "levels": {
     "peering_service": {
       "nodes": {
         "<service_id>": {
           "ns": "<C++ namespace>",
           "layer": "<storage|cluster|services|query|api>",
-          "summary": "<2-5 sentence description>",
+          "summary": "<1 sentence essence>",
           "files": ["<relative/path/to/file1>", "..."],
           "linesAdded": 0,
           "linesRemoved": 0,
@@ -196,7 +198,7 @@ For multi-commit diffs, the title should describe the overall theme and the summ
       },
       "edges": {
         "<source>-><target>": {
-          "summary": "<1-2 sentence description>"
+          "summary": "<short sentence>"
         }
       }
     },
@@ -205,7 +207,7 @@ For multi-commit diffs, the title should describe the overall theme and the summ
         "<class_id>": {
           "ns": "<C++ namespace>",
           "layer": "<storage|cluster|services|query|api>",
-          "summary": "<2-4 sentence description>",
+          "summary": "<1 sentence essence>",
           "files": ["<relative/path/to/file1>", "..."],
           "linesAdded": 0,
           "linesRemoved": 0,
@@ -214,7 +216,7 @@ For multi-commit diffs, the title should describe the overall theme and the summ
       },
       "edges": {
         "<source>-><target>": {
-          "summary": "<1-2 sentence description>"
+          "summary": "<short sentence>"
         }
       }
     }
@@ -263,6 +265,7 @@ After generating all files:
 - **Do NOT skip non-service classes.** Every C++ class touched by the diff should appear at the class level, even if it's not a sharded service.
 - **Do NOT include raw diff hunks** in the summaries. Write high-level descriptions.
 - **Do NOT quote code-level names** (functions, methods, variables, classes, types) in summaries. Describe behavior and architecture, not code symbols.
+- **Keep summaries extremely brief.** 1 sentence per node, 1 short sentence per edge. If it feels too long, cut it. The UI is compact and users scan quickly.
 - **Do NOT include test-only changes** as nodes. Test files are skipped entirely.
 - **Edge format is `source->target`** at all levels. Use the node IDs of that level.
 - **Every node needs a layer.** Do not leave `layer` empty or null. Use the heuristics in step 6 to assign one.

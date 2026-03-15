@@ -833,6 +833,8 @@
         _selectedNode = null;
         _resetHighlight();
         _showOverviewPanel();
+      } else {
+        _hideInfoPanel();
       }
       return;
     }
