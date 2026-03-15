@@ -160,7 +160,7 @@
     // Scale usable area based on node count for better spacing
     const nodeCount = nodes.length;
     const areaScale = nodeCount > 12 ? 1 + (nodeCount - 12) * 0.15 : 1;
-    const usableH = svgH * 3 * Math.max(1, areaScale * 0.8);
+    const usableH = svgH * 1.5 * Math.max(1, areaScale * 0.8);
     const usableW = svgW * 3 * Math.max(1, areaScale);
     const tierCount = LAYER_ORDER.length;
     const tierSpacing = usableH / (tierCount + 1);
