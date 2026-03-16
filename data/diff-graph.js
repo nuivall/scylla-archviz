@@ -456,8 +456,36 @@
     // Reset zoom
     svg.call(_zoom.transform, d3.zoomIdentity);
 
+    // Determine whether other levels have data so we can show a helpful message
+    var otherLevel = null;
+    if (_hasData()) {
+      for (var i = 0; i < LEVELS.length; i++) {
+        if (LEVELS[i] !== activeLevel) {
+          var ld = DIFF_ANALYSIS_DATA.levels[LEVELS[i]];
+          if (ld && ld.nodes && Object.keys(ld.nodes).length > 0) {
+            otherLevel = LEVELS[i];
+            break;
+          }
+        }
+      }
+    }
+
+    var heading, subtitle;
+    if (otherLevel) {
+      // Current level is empty but another has data
+      var currentLabel = LEVEL_LABELS[activeLevel] || activeLevel;
+      var otherLabel = LEVEL_LABELS[otherLevel] || otherLevel;
+      var otherKey = LEVELS.indexOf(otherLevel) + 1;
+      heading = 'No ' + currentLabel.toLowerCase() + ' affected by this diff';
+      subtitle = 'Switch to ' + otherLabel + ' view to see affected components (press ' + otherKey + ')';
+    } else {
+      // No data at any level
+      heading = 'No diff analysis data available';
+      subtitle = 'Run the generate-diff skill to populate this view';
+    }
+
     nodeGroup.append('text')
-      .text('No diff analysis data available')
+      .text(heading)
       .attr('x', svgW / 2)
       .attr('y', svgH / 2 - 10)
       .attr('text-anchor', 'middle')
@@ -466,7 +494,7 @@
       .attr('font-weight', 500);
 
     nodeGroup.append('text')
-      .text('Run the generate-diff skill to populate this view')
+      .text(subtitle)
       .attr('x', svgW / 2)
       .attr('y', svgH / 2 + 16)
       .attr('text-anchor', 'middle')
