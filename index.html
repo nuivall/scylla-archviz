@@ -482,7 +482,7 @@
     font-size: 11px;
     color: var(--text-muted);
     padding: 2px 0;
-    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
   }
   .diff-commit-title {
     font-size: 14px;
@@ -492,7 +492,7 @@
   }
    .diff-commit-hash {
     font-size: 11px;
-    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     color: var(--text-muted);
     margin-bottom: 8px;
   }
@@ -517,11 +517,11 @@
     background: var(--bg-secondary);
     border-right: 1px solid var(--border);
     padding: 12px 0;
-    font-size: 12px;
+    font-size: 14px;
     user-select: none;
   }
   .diff-file-tree-title {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -547,13 +547,13 @@
     display: inline-block;
     width: 14px;
     text-align: center;
-    font-size: 9px;
+    font-size: 10px;
     transition: transform 0.15s;
     flex-shrink: 0;
   }
   .diff-tree-dir.collapsed .diff-tree-chevron { transform: rotate(-90deg); }
   .diff-tree-dir-icon {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted);
     opacity: 0.5;
     flex-shrink: 0;
@@ -574,8 +574,8 @@
     text-overflow: ellipsis;
     border-left: 2px solid transparent;
     transition: background 0.1s, border-color 0.1s;
-    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
-    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-size: 13px;
     font-weight: 500;
   }
   .diff-tree-file:hover { background: var(--bg-tertiary); }
@@ -597,7 +597,7 @@
   }
   .diff-tree-badge {
     flex-shrink: 0;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     padding: 1px 5px;
     border-radius: 6px;
@@ -706,9 +706,9 @@
   }
   .diff-file-card.expanded .diff-file-chevron { transform: rotate(90deg); }
   .diff-file-name {
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
-    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -722,7 +722,7 @@
     align-items: center;
   }
   .diff-file-badge {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     padding: 2px 7px;
     border-radius: 8px;
@@ -736,7 +736,7 @@
   .diff-file-badge.renamed-file { color: #bd93f9; background: rgba(189,147,249,0.12); border: 1px solid rgba(189,147,249,0.25); }
 
   .diff-file-summary {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-muted);
     padding: 6px 14px 8px 40px;
     line-height: 1.5;
@@ -753,8 +753,8 @@
   }
   .diff-file-card.expanded .diff-file-body { display: block; }
   .diff-hunk-header {
-    font-size: 11px;
-    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     color: var(--text-muted);
     background: var(--bg-tertiary);
     padding: 4px 14px;
@@ -764,26 +764,26 @@
   }
   .diff-line {
     display: flex;
-    font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
-    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-size: 13px;
     font-weight: 500;
     line-height: 1.65;
     min-height: 20px;
     border-left: 3px solid transparent;
   }
   .diff-line-add {
-    background: rgba(126,200,154,0.07);
+    background: rgba(126,200,154,0.13);
     border-left-color: #7ec89a;
   }
   [data-theme="dark"] .diff-line-add {
-    background: rgba(126,200,154,0.12);
+    background: rgba(126,200,154,0.18);
   }
   .diff-line-del {
-    background: rgba(255,85,85,0.06);
+    background: rgba(255,85,85,0.11);
     border-left-color: #ff5555;
   }
   [data-theme="dark"] .diff-line-del {
-    background: rgba(255,85,85,0.12);
+    background: rgba(255,85,85,0.18);
   }
   .diff-line-ctx {
     border-left-color: transparent;
